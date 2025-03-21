@@ -56,6 +56,322 @@ pub struct Rule {
 }
 ```
 
+#### Example Configuration
+
+Below is an example configuration that demonstrates various use cases:
+
+```json
+{
+    "rules": [
+        {
+            // All imports from the package are done through the dist/index.js file
+            "pattern": "@direct-frontend/stdlib",
+            "paths": ["/abs/path/to/stdlib/dist/index.js"]
+        },
+        {
+            // All imports from the package are done through the dist/index.js file
+            "pattern": "@direct-frontend/components",
+            "paths": ["/abs/path/to/components/dist/index.js"]
+        },
+        {
+            // All test imports from the package are done through the dist/testing.js file
+            "pattern": "@direct-frontend/components/testing",
+            "paths": ["/abs/path/to/components/dist/testing.js"]
+        },
+        {
+            // All imports from modules are done through the index.ts file in the module root
+            "pattern": "#entities/*",
+            "paths": ["/abs/path/to/src/entities/*/index.ts"]
+        },
+        {
+            // All test imports from modules are done through the testing.ts file in the module root
+            "pattern": "#entities/*/testing",
+            "paths": ["/abs/path/to/src/entities/*/testing.ts"]
+        }
+    ]
+}
+```
+
+This configuration demonstrates:
+
+1. Direct package imports (e.g., `@direct-frontend/stdlib`)
+2. Subpath imports from packages (e.g., `@direct-frontend/components/testing`)
+3. Path alias imports with wildcards (e.g., `#entities/*`)
+4. Special case handling for testing imports
+
+### 4.1.1. Path Resolution
+
+The `paths` array in each rule specifies the possible file paths to resolve for a given import pattern. These paths can be:
+
+1. **Absolute paths**: Starting with `/` (e.g., `/abs/path/to/file.js`)
+2. **Relative paths**: Relative to the current working directory (e.g., `./src/components/index.ts` or `src/components/index.ts`)
+
+#### Path Resolution Examples
+
+**Absolute Paths**:
+
+```json
+{
+    "pattern": "@direct-frontend/stdlib",
+    "paths": ["/abs/path/to/stdlib/dist/index.js"]
+}
+```
+
+**Relative Paths**:
+
+```json
+{
+    "pattern": "@direct-frontend/stdlib",
+    "paths": ["./node_modules/@direct-frontend/stdlib/dist/index.js"]
+}
+```
+
+**Multiple Path Options**:
+The plugin will try each path in order until it finds a match:
+
+```json
+{
+    "pattern": "@direct-frontend/components",
+    "paths": [
+        "./node_modules/@direct-frontend/components/dist/index.js",
+        "./local_modules/@direct-frontend/components/dist/index.js"
+    ]
+}
+```
+
+**Paths with Wildcards**:
+When a pattern contains wildcards, the corresponding parts in the path are replaced with the matched values:
+
+```json
+{
+    "pattern": "#entities/*",
+    "paths": ["./src/entities/*/index.ts"]
+}
+```
+
+For example, an import like `import { User } from '#entities/user'` would be resolved to `./src/entities/user/index.ts`.
+
+**Important Notes**:
+
+- The plugin does not use TypeScript's path mapping or Node.js module resolution by default - all path resolution must be explicitly configured
+- Paths are resolved at compile time, so they must point to files that exist when the plugin runs
+- If a path cannot be resolved, the plugin will leave the import unchanged
+
+### 4.1.2. Pattern Matching with Wildcards
+
+The plugin supports wildcards in import patterns to match a range of imports with a single rule. Here's how wildcard pattern matching works:
+
+#### Wildcard Syntax
+
+- `*` - Matches any sequence of characters except `/`
+- Multiple wildcards can be used in a single pattern
+
+#### Pattern Matching Examples
+
+1. **Single Wildcard**:
+
+    ```json
+    {
+        "pattern": "#entities/*",
+        "paths": ["./src/entities/*/index.ts"]
+    }
+    ```
+
+    - Matches: `#entities/user`, `#entities/product`, etc.
+    - Does not match: `#entities/user/models` (contains an extra path segment)
+
+2. **Multiple Wildcards**:
+
+    ```json
+    {
+        "pattern": "#features/*/components/*",
+        "paths": ["./src/features/*/components/*/index.ts"]
+    }
+    ```
+
+    - Matches: `#features/auth/components/login`, `#features/dashboard/components/chart`
+    - The first wildcard captures the feature name, the second captures the component name
+
+3. **Wildcard in the Middle**:
+    ```json
+    {
+        "pattern": "#entities/*/testing",
+        "paths": ["./src/entities/*/testing.ts"]
+    }
+    ```
+    - Matches: `#entities/user/testing`, `#entities/product/testing`
+    - The wildcard captures the entity name
+
+#### How Wildcards Are Processed
+
+1. The plugin converts the pattern to a regular expression, replacing `*` with a capture group `([^/]+)`
+2. When a match is found, the captured values are extracted
+3. These captured values are then used to replace the corresponding `*` in the path template
+4. The resulting path is checked for existence in the file system
+
+#### Pattern Matching Priority
+
+When multiple patterns could match an import, the plugin uses the following rules to determine which one to apply:
+
+1. More specific patterns (with fewer wildcards) take precedence over more general ones
+2. If patterns have the same number of wildcards, the one defined earlier in the configuration takes precedence
+
+For example, given these rules:
+
+```json
+{
+    "rules": [
+        {
+            "pattern": "#entities/user",
+            "paths": ["./src/specific-entities/user/index.ts"]
+        },
+        {
+            "pattern": "#entities/*",
+            "paths": ["./src/entities/*/index.ts"]
+        }
+    ]
+}
+```
+
+An import of `#entities/user` would match the first rule because it's more specific, while `#entities/product` would match the second rule.
+
+### 4.1.3. Import Transformation Examples
+
+To better understand how the plugin transforms imports based on the configuration rules, let's look at some examples using the configuration from section 4.1.
+
+#### Example 1: Package Import
+
+**Original Import**:
+
+```typescript
+import { Button, TextField } from "@direct-frontend/components";
+```
+
+**Barrel File Content** (`/abs/path/to/components/dist/index.js`):
+
+```typescript
+export { Button } from "./Button";
+export { TextField } from "./TextField";
+// ... other exports
+```
+
+**Transformed Import**:
+
+```typescript
+import { Button } from "/abs/path/to/components/dist/Button";
+import { TextField } from "/abs/path/to/components/dist/TextField";
+```
+
+#### Example 2: Package Subpath Import
+
+**Original Import**:
+
+```typescript
+import { render, screen } from "@direct-frontend/components/testing";
+```
+
+**Barrel File Content** (`/abs/path/to/components/dist/testing.js`):
+
+```typescript
+export { render, screen } from "./testing/render";
+export { fireEvent } from "./testing/events";
+```
+
+**Transformed Import**:
+
+```typescript
+import { render, screen } from "/abs/path/to/components/dist/testing/render";
+```
+
+#### Example 3: Path Alias with Wildcard
+
+**Original Import**:
+
+```typescript
+import { User, createUser } from "#entities/user";
+```
+
+**Barrel File Content** (`/abs/path/to/src/entities/user/index.ts`):
+
+```typescript
+export { User } from "./models";
+export { createUser } from "./api";
+```
+
+**Transformed Import**:
+
+```typescript
+import { User } from "/abs/path/to/src/entities/user/models";
+import { createUser } from "/abs/path/to/src/entities/user/api";
+```
+
+#### Example 4: Testing Import with Wildcard
+
+**Original Import**:
+
+```typescript
+import { mockUserData } from "#entities/user/testing";
+```
+
+**Barrel File Content** (`/abs/path/to/src/entities/user/testing.ts`):
+
+```typescript
+export { mockUserData } from "./testing/mock-data";
+export { UserTestProvider } from "./testing/provider";
+```
+
+**Transformed Import**:
+
+```typescript
+import { mockUserData } from "/abs/path/to/src/entities/user/testing/mock-data";
+```
+
+#### Example 5: Multiple Imports from Same Source
+
+**Original Import**:
+
+```typescript
+import { Button, TextField, Checkbox } from "@direct-frontend/components";
+```
+
+**Barrel File Content** (`/abs/path/to/components/dist/index.js`):
+
+```typescript
+export { Button } from "./Button";
+export { TextField } from "./TextField";
+export { Checkbox } from "./forms/Checkbox";
+```
+
+**Transformed Import**:
+
+```typescript
+import { Button } from "/abs/path/to/components/dist/Button";
+import { TextField } from "/abs/path/to/components/dist/TextField";
+import { Checkbox } from "/abs/path/to/components/dist/forms/Checkbox";
+```
+
+#### Example 6: Default Exports
+
+**Original Import**:
+
+```typescript
+import Button from "@direct-frontend/components/Button";
+```
+
+**Barrel File Content** (`/abs/path/to/components/dist/Button.js`):
+
+```typescript
+export { default } from "./components/Button/Button";
+```
+
+**Transformed Import**:
+
+```typescript
+import Button from "/abs/path/to/components/dist/components/Button/Button";
+```
+
+These examples demonstrate how the plugin analyzes barrel files and transforms imports to directly reference the original source files, which helps with tree-shaking and reduces bundle size.
+
 ### 4.2. Import Visitor
 
 Implement a visitor that traverses the AST and identifies import declarations:
