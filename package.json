@@ -1,0 +1,22 @@
+{
+    "name": "swc-barrel-files",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "build": "cd swc-plugin && cargo build-wasi --release",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "devDependencies": {
+        "@swc/core": "^1.11.11",
+        "@types/node": "^22.13.11",
+        "memfs": "^4.17.0",
+        "prettier": "^3.5.3",
+        "typescript": "^5.8.2",
+        "vitest": "^3.0.9"
+    }
+}

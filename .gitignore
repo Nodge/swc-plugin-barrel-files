@@ -1,0 +1,4 @@
+.swc
+swc-plugin/example
+swc-plugin/target
+node_modules
