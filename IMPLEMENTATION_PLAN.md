@@ -703,11 +703,65 @@ Provide clear error messages for:
 - Missing or unresolvable files
 - Configuration errors
 
+### 5.5. Additional Rules and Constraints
+
+The plugin enforces several important rules to ensure proper optimization and prevent unexpected behavior:
+
+1. **No Wildcard Exports in Barrel Files**
+
+    - Barrel files must not contain wildcard exports (e.g., `export * from './module'`)
+    - If a wildcard export is detected, the plugin will throw an error
+    - This ensures that all exports are explicitly defined, making the optimization more reliable
+
+2. **No Nested or Recursive Barrel Files**
+
+    - The plugin does not support barrel files that import from other barrel files
+    - This prevents complex resolution chains that could lead to unpredictable behavior
+    - Each barrel file should only re-export from original source files
+
+3. **Strict Identifier Resolution**
+
+    - If an imported identifier is not found in the barrel file, the plugin will throw an error
+    - This helps catch typos and missing exports early in the development process
+    - All imports must correspond to actual exports in the barrel file
+
+4. **File System Cache Configuration**
+    - The file system cache invalidates based on time in milliseconds
+    - The cache duration is configurable through the plugin configuration
+    - Default cache duration is 1000 ms (1 second)
+    - This helps balance performance with up-to-date file detection
+
+```rust
+#[derive(Deserialize, Debug)]
+pub struct Config {
+    // Rules for pattern matching (optional)
+    rules: Option<Vec<Rule>>,
+
+    // Cache duration in milliseconds (optional, defaults to 1000)
+    cache_duration_ms: Option<u64>,
+}
+```
+
+These additional constraints help ensure that the plugin operates reliably and produces predictable optimizations.
+
 ## 6. Testing Strategy
 
 1. **Unit Tests**: Test individual components like pattern matching, file resolution, etc.
+
+    - Written in Rust, following standard Rust testing practices
+    - Focus on testing each component in isolation
+    - Cover edge cases for pattern matching, path resolution, and barrel file analysis
+
 2. **Integration Tests**: Test the complete transformation process with various input/output scenarios
+
+    - Written in TypeScript inside the `tests` directory
+    - Test the plugin as a whole with real-world import scenarios
+    - Verify that imports are correctly transformed according to configuration
+
 3. **Edge Case Tests**: Test special cases like renamed exports, nested barrel files, etc.
+    - Combination of Rust unit tests and TypeScript integration tests
+    - Ensure the plugin handles error conditions gracefully
+    - Verify that constraints like "no wildcard exports" are properly enforced
 
 ## 7. Implementation Timeline
 

@@ -77,11 +77,3 @@ import { Button } from '../features/test/components/Button';
 import { select } from '../features/test/model/selector';
 import { mock } from '../features/test/api/mocks/test';
 ```
-
-- как работают паттерны
-- обработка export \* from '...'
-- как работают вложенные barrel файлы
-- что делать, если в экспортах не найден символ
-- кеш файловой системы должен инвалидироваться по времени, время настраивается через конфиг
-- юнит тесты пишем на rust
-- интеграционные тесты пишем на typescript внутри директории tests
