@@ -663,6 +663,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pathdiff"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1206,6 +1212,7 @@ dependencies = [
  "swc_atoms",
  "swc_common",
  "swc_ecma_ast",
+ "swc_ecma_parser",
  "swc_ecma_quote_macros",
  "swc_ecma_transforms_base",
  "swc_ecma_transforms_testing",
@@ -1448,11 +1455,13 @@ name = "swc_plugin_barrel_files"
 version = "0.1.0"
 dependencies = [
  "once_cell",
+ "pathdiff",
  "regex",
  "serde",
  "serde_json",
  "swc_core",
  "swc_ecma_utils",
+ "tempfile",
  "testing",
 ]
 

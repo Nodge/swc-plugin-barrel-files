@@ -715,7 +715,7 @@ The plugin enforces several important rules to ensure proper optimization and pr
 
 2. **No Nested or Recursive Barrel Files**
 
-    - The plugin does not support barrel files that import from other barrel files
+    - The plugin does not support barrel files that import from other barrel files. The other file will not be transformed.
     - This prevents complex resolution chains that could lead to unpredictable behavior
     - Each barrel file should only re-export from original source files
 
