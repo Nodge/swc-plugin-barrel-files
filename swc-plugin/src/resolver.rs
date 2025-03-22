@@ -29,26 +29,17 @@ pub fn resolve_barrel_file(
 ) -> Result<Option<String>, String> {
     let components = extract_pattern_components(import_path, pattern);
 
-    println!("import_path: {}", import_path);
-
     for path_template in paths {
-        println!("Try path template: {}", path_template);
-
         let resolved_path = apply_components_to_template(path_template, &components);
         let path = match resolve_to_virtual_path(cwd, &resolved_path) {
             Ok(path) => path,
             Err(err) => return Err(err),
         };
 
-        println!("Try path: {}", path);
-
         if Path::new(&path).exists() {
-            println!("Resolved path: {}", path);
             return Ok(Some(path));
         }
     }
-
-    println!("Not found");
 
     Ok(None)
 }
@@ -107,6 +98,7 @@ pub fn resolve_relative_path(from_path: &str, to_path: &str) -> Option<String> {
         let mut ita = path.components();
         let mut itb = base.components();
         let mut comps: Vec<Component> = vec![];
+
         loop {
             match (ita.next(), itb.next()) {
                 (None, None) => break,
@@ -130,20 +122,26 @@ pub fn resolve_relative_path(from_path: &str, to_path: &str) -> Option<String> {
                 }
             }
         }
-        // Collect into a PathBuf and then convert to String
+
+        if comps.is_empty() || comps[0] != Component::ParentDir {
+            comps.insert(0, Component::CurDir);
+        }
+
         let path_buf: PathBuf = comps.iter().collect();
         Some(path_buf.to_string_lossy().to_string())
     }
 }
 
-pub fn dirname(path: &str) -> String {
-    Path::new(path)
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .to_string_lossy()
-        .to_string()
-}
-
+/// Joins two path segments together, handling normalization of path components
+///
+/// # Arguments
+///
+/// * `path` - The base path
+/// * `path2` - The path to join to the base path
+///
+/// # Returns
+///
+/// A normalized joined path string
 pub fn path_join(path: &str, path2: &str) -> String {
     let joined_path = Path::new(path).join(path2);
 
@@ -185,32 +183,95 @@ pub fn path_join(path: &str, path2: &str) -> String {
     normalized_path.to_string_lossy().to_string()
 }
 
+/// Gets the directory name of a path
+///
+/// # Arguments
+///
+/// * `path` - The path to get the directory name from
+///
+/// # Returns
+///
+/// The directory name of the path. Returns an empty string if the path has no parent.
+pub fn dirname(path: &str) -> String {
+    Path::new(path)
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .to_string_lossy()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_resolve_relative_path() {
-        // Test the example provided by the user
+        // Common directory one level up
         assert_eq!(
             resolve_relative_path("/a/b", "/a/c"),
             Some("../c".to_string())
         );
-
-        // Additional test cases
+        // Common directory two levels up
         assert_eq!(
             resolve_relative_path("/a/b/c", "/a/d/e"),
             Some("../../d/e".to_string())
         );
-        assert_eq!(
-            resolve_relative_path("/a/b", "/a/b/c"),
-            Some("c".to_string())
-        );
-        assert_eq!(resolve_relative_path("/a/b", "/a/b"), Some("".to_string()));
+        // No common directory
         assert_eq!(
             resolve_relative_path("/a/b/c", "/d/e/f"),
             Some("../../../d/e/f".to_string())
         );
+        // Subdirectory of base directory
+        assert_eq!(
+            resolve_relative_path("/a/b", "/a/b/c"),
+            Some("./c".to_string())
+        );
+        // Same directory
+        assert_eq!(resolve_relative_path("/a/b", "/a/b"), Some(".".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_to_virtual_path() {
+        // Test with path starting with cwd
+        let cwd = "/home/user/project";
+        let path = "/home/user/project/src/main.rs";
+        assert_eq!(
+            resolve_to_virtual_path(cwd, path).unwrap(),
+            "/cwd/src/main.rs"
+        );
+
+        // Test with relative path
+        let path = "src/main.rs";
+        assert_eq!(
+            resolve_to_virtual_path(cwd, path).unwrap(),
+            "/cwd/src/main.rs"
+        );
+
+        // Test with absolute path not starting with cwd
+        let path = "/other/path/file.rs";
+        assert!(resolve_to_virtual_path(cwd, path).is_err());
+        assert_eq!(
+            resolve_to_virtual_path(cwd, path).unwrap_err(),
+            "Absolute paths not starting with cwd are not supported: /other/path/file.rs"
+        );
+    }
+
+    #[test]
+    fn test_dirname() {
+        // Test with normal path
+        assert_eq!(dirname("/path/to/file.txt"), "/path/to");
+
+        // Test with path ending with directory separator
+        assert_eq!(dirname("/path/to/dir/"), "/path/to");
+
+        // Test with root path
+        assert_eq!(dirname("/"), "");
+
+        // Test with relative path
+        assert_eq!(dirname("path/to/file.txt"), "path/to");
+
+        // Test with single file (no directory)
+        assert_eq!(dirname("file.txt"), "");
     }
 
     #[test]
@@ -218,7 +279,9 @@ mod tests {
         // Basic path joining
         assert_eq!(path_join("a", "b"), "a/b");
         assert_eq!(path_join("a/", "b"), "a/b");
-        assert_eq!(path_join("a", "/b"), "/b"); // Absolute path in second arg replaces first
+
+        // Absolute path in second arg replaces first
+        assert_eq!(path_join("a", "/b"), "/b");
 
         // Handling of . and .. components
         assert_eq!(path_join("a/b", "../c"), "a/c");

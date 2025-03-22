@@ -50,9 +50,10 @@ describe("SWC Barrel Files Transformation", () => {
         });
 
         expect(outputCode).toMatchInlineSnapshot(`
-            import { Button } from '../../features/some/components/Button';
-            import { select } from '../../features/some/model/selector';
-            console.log(Button, select);
+          "import { Button } from "../../features/some/components/Button";
+          import { select } from "../../features/some/model/selector";
+          console.log(Button, select);
+          "
         `);
     });
 
@@ -67,8 +68,9 @@ describe("SWC Barrel Files Transformation", () => {
         });
 
         expect(outputCode).toMatchInlineSnapshot(`
-            import { mock } from '../../features/some/api/mocks/test';
-            console.log(mock);
+          "import { mock } from "../../features/some/api/mocks/test";
+          console.log(mock);
+          "
         `);
     });
 });

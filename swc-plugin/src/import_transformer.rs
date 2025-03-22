@@ -1,4 +1,3 @@
-use crate::cache::FileCache;
 use crate::re_export::{analyze_barrel_file, ReExport};
 use crate::resolver::{
     dirname, path_join, resolve_barrel_file, resolve_relative_path, resolve_to_virtual_path,
@@ -58,14 +57,6 @@ fn transform_import(
                 {
                     let target_path = path_join(&barrel_file_dir, &re_export.source_path);
                     let import_path = resolve_relative_path(source_dir, &target_path).unwrap();
-
-                    println!("Resolve START --------");
-                    println!("source_dir: {}", source_dir);
-                    println!("barrel_file_dir: {}", barrel_file_dir);
-                    println!("export: {}", re_export.source_path);
-                    println!("target_path: {}", target_path);
-                    println!("import_path: {}", import_path);
-                    println!("Resolve END --------");
 
                     if re_export.is_default {
                         let default_specifier = ImportSpecifier::Default(ImportDefaultSpecifier {
@@ -200,13 +191,10 @@ fn parse_file(file_path: &str) -> Result<Module, String> {
 ///
 /// A list of re-exports if the file is a valid barrel file, `Err` otherwise
 fn parse_barrel_file_exports(file_path: &str) -> Result<Vec<ReExport>, String> {
-    // Parse the file into an AST
     let ast = parse_file(file_path)?;
 
-    // Analyze the barrel file to extract re-exports
     match analyze_barrel_file(&ast, file_path) {
         Ok(re_exports) => {
-            // Check if any re-exports were found
             if re_exports.is_empty() {
                 return Err(format!("No re-exports found in barrel file: {}", file_path));
             }
@@ -225,7 +213,6 @@ fn parse_barrel_file_exports(file_path: &str) -> Result<Vec<ReExport>, String> {
 /// * `import_decl` - The import declaration to process
 /// * `pattern` - The pattern that matched the import
 /// * `paths` - The possible paths to resolve to
-/// * `_file_cache` - The file cache (not used as per requirements)
 ///
 /// # Returns
 ///
@@ -237,9 +224,7 @@ pub fn process_import(
     import_decl: &ImportDecl,
     pattern: &str,
     paths: &[String],
-    _file_cache: &mut FileCache,
 ) -> Result<Vec<ImportDecl>, String> {
-    // Resolve the barrel file
     let import_source = import_decl.src.value.to_string();
     let barrel_file = match resolve_barrel_file(cwd, &import_source, pattern, paths) {
         Ok(res) => match res {
@@ -259,7 +244,6 @@ pub fn process_import(
         }
     };
 
-    // Parse the barrel file directly without using cache
     let re_exports = match parse_barrel_file_exports(&barrel_file) {
         Ok(exports) => exports,
         Err(e) => {
@@ -282,7 +266,6 @@ pub fn process_import(
     };
     let source_dir = dirname(&source_file);
 
-    // Transform the import declaration
     match transform_import(&source_dir, import_decl, &barrel_file, &re_exports) {
         Ok(new_imports) => Ok(new_imports),
         Err(e) => Err(format!(

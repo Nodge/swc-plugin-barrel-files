@@ -7,19 +7,6 @@
 use regex::Regex;
 use std::collections::HashMap;
 
-/// Represents a pattern match result
-#[derive(Debug, Clone, PartialEq)]
-pub struct PatternMatch {
-    /// The pattern that matched
-    pub pattern: String,
-
-    /// The captured components from the pattern
-    pub components: HashMap<String, String>,
-
-    /// The number of wildcards in the pattern (used for specificity calculation)
-    pub wildcard_count: usize,
-}
-
 /// Matches an import path against a pattern with wildcards
 ///
 /// # Arguments
@@ -53,11 +40,10 @@ pub fn path_matches_pattern(path: &str, pattern: &str) -> bool {
 /// # Returns
 ///
 /// The number of wildcards (`*`) in the pattern
-fn count_wildcards(pattern: &str) -> usize {
+pub fn count_wildcards(pattern: &str) -> usize {
     pattern.matches('*').count()
 }
 
-/// Extracts components from an import path based on a pattern with wildcards
 ///
 /// # Arguments
 ///
@@ -125,66 +111,6 @@ pub fn apply_components_to_template(
     }
 
     result
-}
-
-/// Finds the best matching pattern for an import path from a list of patterns
-///
-/// # Arguments
-///
-/// * `path` - The import path to match
-/// * `patterns` - A list of patterns to match against
-///
-/// # Returns
-///
-/// The best matching pattern, or None if no pattern matches
-///
-/// The best match is determined by:
-/// 1. More specific patterns (with fewer wildcards) take precedence
-/// 2. If patterns have the same number of wildcards, the one that appears earlier in the list takes precedence
-pub fn find_best_matching_pattern(path: &str, patterns: &[String]) -> Option<PatternMatch> {
-    let mut matches: Vec<PatternMatch> = Vec::new();
-
-    // Find all matching patterns
-    for pattern in patterns {
-        if path_matches_pattern(path, pattern) {
-            let components = extract_pattern_components(path, pattern);
-            let wildcard_count = count_wildcards(pattern);
-
-            matches.push(PatternMatch {
-                pattern: pattern.clone(),
-                components,
-                wildcard_count,
-            });
-        }
-    }
-
-    if matches.is_empty() {
-        return None;
-    }
-
-    // Sort matches by specificity (fewer wildcards = more specific)
-    matches.sort_by(|a, b| {
-        // First by wildcard count (ascending)
-        let count_cmp = a.wildcard_count.cmp(&b.wildcard_count);
-
-        if count_cmp == std::cmp::Ordering::Equal {
-            // Then by position in the patterns array (earlier = higher priority)
-            let a_pos = patterns
-                .iter()
-                .position(|p| p == &a.pattern)
-                .unwrap_or(usize::MAX);
-            let b_pos = patterns
-                .iter()
-                .position(|p| p == &b.pattern)
-                .unwrap_or(usize::MAX);
-            a_pos.cmp(&b_pos)
-        } else {
-            count_cmp
-        }
-    });
-
-    // Return the best match (most specific or earliest in the list)
-    matches.into_iter().next()
 }
 
 #[cfg(test)]
@@ -310,51 +236,5 @@ mod tests {
 
         let result = apply_components_to_template("*/*/template", &components);
         assert_eq!(result, "first/second/template");
-    }
-
-    #[test]
-    fn test_find_best_matching_pattern() {
-        // Test with specific pattern taking precedence
-        let patterns = vec!["#entities/user".to_string(), "#entities/*".to_string()];
-
-        let best_match = find_best_matching_pattern("#entities/user", &patterns);
-        assert!(best_match.is_some());
-        let match_result = best_match.unwrap();
-        assert_eq!(match_result.pattern, "#entities/user");
-        assert_eq!(match_result.wildcard_count, 0);
-
-        // Test with wildcard pattern
-        let best_match = find_best_matching_pattern("#entities/product", &patterns);
-        assert!(best_match.is_some());
-        let match_result = best_match.unwrap();
-        assert_eq!(match_result.pattern, "#entities/*");
-        assert_eq!(match_result.wildcard_count, 1);
-
-        // Test with no matching pattern
-        let best_match = find_best_matching_pattern("#features/auth", &patterns);
-        assert!(best_match.is_none());
-
-        // Test with multiple patterns having the same wildcard count
-        let patterns = vec![
-            "#features/*/components".to_string(),
-            "#features/*/pages".to_string(),
-        ];
-
-        let best_match = find_best_matching_pattern("#features/auth/components", &patterns);
-        assert!(best_match.is_some());
-        let match_result = best_match.unwrap();
-        assert_eq!(match_result.pattern, "#features/*/components");
-
-        // Test with patterns having different wildcard counts
-        let patterns = vec![
-            "#features/*/components/*".to_string(),
-            "#features/auth/components/*".to_string(),
-        ];
-
-        let best_match = find_best_matching_pattern("#features/auth/components/button", &patterns);
-        assert!(best_match.is_some());
-        let match_result = best_match.unwrap();
-        assert_eq!(match_result.pattern, "#features/auth/components/*");
-        assert_eq!(match_result.wildcard_count, 1);
     }
 }

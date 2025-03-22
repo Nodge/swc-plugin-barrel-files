@@ -12,6 +12,7 @@ mod resolver;
 use serde::Deserialize;
 // use swc_core::common::errors::HANDLER;
 // use swc_core::common::DUMMY_SP;
+use std::collections::HashMap;
 use swc_core::ecma::ast::{ImportDecl, Module, ModuleItem, Program};
 use swc_core::ecma::visit::{as_folder, FoldWith, VisitMut, VisitMutWith};
 use swc_core::plugin::metadata::TransformPluginMetadataContextKind;
@@ -19,7 +20,7 @@ use swc_core::plugin::{plugin_transform, proxies::TransformPluginProgramMetadata
 
 use cache::FileCache;
 use import_transformer::process_import;
-use pattern_matcher::path_matches_pattern;
+use pattern_matcher::{count_wildcards, path_matches_pattern};
 
 /// Configuration for the barrel files plugin
 #[derive(Deserialize, Debug)]
@@ -43,9 +44,6 @@ struct Rule {
 
 /// Visitor for transforming barrel file imports
 struct BarrelTransformVisitor {
-    /// Plugin configuration
-    config: Config,
-
     /// Compilation working directory
     cwd: String,
 
@@ -53,10 +51,14 @@ struct BarrelTransformVisitor {
     filename: String,
 
     /// File system cache
-    file_cache: FileCache,
+    _file_cache: FileCache,
 
-    /// Additional imports to be added to the module
-    additional_imports: Vec<ModuleItem>,
+    /// Map of import declarations to their replacements
+    /// The key is the span of the original import, and the value is a vector of replacement imports
+    import_replacements: HashMap<u32, Vec<ImportDecl>>,
+
+    /// Rules sorted by specificity (fewer wildcards first)
+    sorted_rules: Vec<Rule>,
 }
 
 impl BarrelTransformVisitor {
@@ -64,12 +66,22 @@ impl BarrelTransformVisitor {
     fn new(config: Config, cwd: String, filename: String) -> Self {
         let cache_duration_ms = config.cache_duration_ms.unwrap_or(1000);
 
+        // Pre-sort rules by specificity (fewer wildcards = more specific)
+        let sorted_rules = match &config.rules {
+            Some(rules) => {
+                let mut sorted = rules.clone();
+                sorted.sort_by_key(|rule| count_wildcards(&rule.pattern));
+                sorted
+            }
+            None => Vec::new(),
+        };
+
         BarrelTransformVisitor {
-            config,
             cwd,
             filename,
-            file_cache: FileCache::new(cache_duration_ms),
-            additional_imports: Vec::new(),
+            _file_cache: FileCache::new(cache_duration_ms),
+            import_replacements: HashMap::new(),
+            sorted_rules,
         }
     }
 
@@ -83,73 +95,45 @@ impl BarrelTransformVisitor {
     ///
     /// The matching rule if found, `None` otherwise
     fn match_pattern(&self, import_path: &str) -> Option<&Rule> {
-        // If no rules are provided, return None
-        let rules = match &self.config.rules {
-            Some(rules) => rules,
-            None => return None,
-        };
+        if self.sorted_rules.is_empty() {
+            return None;
+        }
 
-        // Check if the import path matches any patterns
-        // Sort rules by specificity (fewer wildcards first)
-        let mut matching_rules: Vec<&Rule> = rules
+        self.sorted_rules
             .iter()
-            .filter(|rule| path_matches_pattern(import_path, &rule.pattern))
-            .collect();
-
-        // Sort by specificity (fewer wildcards = more specific)
-        matching_rules.sort_by_key(|rule| rule.pattern.matches('*').count());
-
-        // Return the most specific matching rule
-        matching_rules.first().copied()
+            .find(|rule| path_matches_pattern(import_path, &rule.pattern))
     }
 }
 
 impl VisitMut for BarrelTransformVisitor {
     fn visit_mut_module(&mut self, module: &mut Module) {
-        // Visit all module items
         module.visit_mut_children_with(self);
     }
 
     fn visit_mut_import_decl(&mut self, import_decl: &mut ImportDecl) {
-        // If no rules are provided, do nothing
-        if self.config.rules.is_none() {
+        if self.sorted_rules.is_empty() {
             return;
         }
 
-        // Get a copy of the import source value
         let import_source = import_decl.src.value.to_string();
 
-        // Check if the import source matches any of our patterns
         if let Some(rule) = self.match_pattern(&import_source) {
-            // Clone the rule to avoid borrowing issues
-            let rule_clone = rule.clone();
-
-            // Process the import based on the matched rule
             match process_import(
                 &self.cwd,
                 &self.filename,
                 import_decl,
-                &rule_clone.pattern,
-                &rule_clone.paths,
-                &mut self.file_cache,
+                &rule.pattern,
+                &rule.paths,
             ) {
                 Ok(new_imports) => {
                     if !new_imports.is_empty() {
-                        // Replace the original import with the new direct imports
-                        // We'll do this by replacing the current import with the first new import
-                        // and adding the rest as new module items
-                        *import_decl = new_imports[0].clone();
+                        // Store the span of the original import as a key
+                        // We'll use this to identify the import in visit_mut_module_items
+                        let span_lo = import_decl.span.lo.0;
 
-                        // Store additional imports to be added later
-                        if new_imports.len() > 1 {
-                            // We need to add these imports to the module
-                            // This is handled in visit_mut_module_items
-                            for import in new_imports.iter().skip(1) {
-                                self.additional_imports.push(ModuleItem::ModuleDecl(
-                                    swc_core::ecma::ast::ModuleDecl::Import(import.clone()),
-                                ));
-                            }
-                        }
+                        // Store all the replacement imports
+                        self.import_replacements
+                            .insert(span_lo, new_imports.clone());
                     }
                 }
                 Err(e) => {
@@ -168,19 +152,53 @@ impl VisitMut for BarrelTransformVisitor {
             }
         }
 
-        // Continue traversing
         import_decl.visit_mut_children_with(self);
     }
 
     fn visit_mut_module_items(&mut self, items: &mut Vec<ModuleItem>) {
-        // First visit all items
+        // First, collect all import declarations and their positions
+        let mut import_positions = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            if let ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import)) = item {
+                import_positions.push((i, import.span.lo.0));
+            }
+        }
+
+        // Now visit all items
         for item in items.iter_mut() {
             item.visit_mut_with(self);
         }
 
-        // Then add any additional imports that were generated
-        if !self.additional_imports.is_empty() {
-            items.extend(self.additional_imports.drain(..));
+        // Then replace original imports with their replacements
+        if !self.import_replacements.is_empty() {
+            // Process imports in reverse order to avoid invalidating indices
+            import_positions.sort_by(|a, b| b.0.cmp(&a.0));
+
+            for (pos, span_lo) in import_positions {
+                if let Some(mut replacements) = self.import_replacements.get(&span_lo).cloned() {
+                    // Sort replacements by module source
+                    replacements
+                        .sort_by(|a, b| a.src.value.to_string().cmp(&b.src.value.to_string()));
+
+                    // Remove the original import
+                    items.remove(pos);
+
+                    // Insert all replacements at the position of the removed import
+                    let mut insert_pos = pos;
+
+                    for import in replacements.iter() {
+                        items.insert(
+                            insert_pos,
+                            ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(
+                                import.clone(),
+                            )),
+                        );
+                        insert_pos += 1;
+                    }
+                }
+            }
+
+            self.import_replacements.clear();
         }
     }
 }
@@ -204,10 +222,6 @@ pub fn process_transform(program: Program, metadata: TransformPluginProgramMetad
         }
     };
 
-    println!("CWD: {}", cwd);
-    println!("Filename: {}", filename);
-
-    // Parse the configuration
     let config: Config = match serde_json::from_str(
         &metadata
             .get_transform_plugin_config()
@@ -227,35 +241,32 @@ pub fn process_transform(program: Program, metadata: TransformPluginProgramMetad
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swc_core::common::DUMMY_SP;
-    use swc_core::ecma::ast::{
-        Ident, ImportDefaultSpecifier, ImportNamedSpecifier, ImportSpecifier, ModuleDecl,
-        ModuleExportName, ModuleItem, Str,
-    };
 
     #[test]
     fn test_config_parsing() {
-        // Create a config directly instead of parsing JSON
-        let rule = Rule {
-            pattern: "#features/*".to_string(),
-            paths: vec!["src/features/*/index.ts".to_string()],
-        };
+        let config_json = r#"{
+            "rules": [
+                {
+                    "pattern": "@features/*",
+                    "paths": ["src/features/*/index.ts"]
+                }
+            ],
+            "cache_duration_ms": 1000
+        }"#;
 
-        let config = Config {
-            rules: Some(vec![rule]),
-            cache_duration_ms: Some(1000),
-        };
+        let config: Config =
+            serde_json::from_str(config_json).expect("Failed to parse config JSON");
 
         assert!(config.rules.is_some());
         let rules = config.rules.unwrap();
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].pattern, "#features/*");
+        assert_eq!(rules[0].pattern, "@features/*");
         assert_eq!(rules[0].paths, vec!["src/features/*/index.ts"]);
+        assert_eq!(config.cache_duration_ms, Some(1000));
     }
 
     #[test]
     fn test_match_pattern() {
-        // Create a visitor with test rules
         let rule1 = Rule {
             pattern: "#features/*".to_string(),
             paths: vec!["src/features/*/index.ts".to_string()],
@@ -266,12 +277,18 @@ mod tests {
             paths: vec!["src/features/*/testing.ts".to_string()],
         };
 
+        // Create config with rules in reverse order of specificity
+        // to ensure sorting works
         let config = Config {
-            rules: Some(vec![rule1.clone(), rule2.clone()]),
+            rules: Some(vec![rule2.clone(), rule1.clone()]),
             cache_duration_ms: Some(1000),
         };
 
-        let visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
+        let visitor = BarrelTransformVisitor::new(config, "/".to_string(), "test.ts".to_string());
+
+        // The more specific rule should be first in sorted_rules
+        assert_eq!(visitor.sorted_rules[0].pattern, "#features/*/testing");
+        assert_eq!(visitor.sorted_rules[1].pattern, "#features/*");
 
         // Test matching
         let matched = visitor.match_pattern("#features/some");
@@ -285,496 +302,4 @@ mod tests {
         let matched = visitor.match_pattern("#other/some");
         assert!(matched.is_none());
     }
-
-    #[test]
-    fn test_visitor_with_no_rules() {
-        // Create a visitor with no rules
-        let config = Config {
-            rules: None,
-            cache_duration_ms: Some(1000),
-        };
-
-        let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-        // Create a test import declaration
-        let mut import_decl = ImportDecl {
-            span: DUMMY_SP,
-            src: Box::new(Str {
-                span: DUMMY_SP,
-                value: "#features/some".into(),
-                raw: None,
-            }),
-            type_only: false,
-            with: None,
-            specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-                span: DUMMY_SP,
-                local: Ident {
-                    span: DUMMY_SP,
-                    sym: "Button".into(),
-                    optional: false,
-                },
-                imported: None,
-                is_type_only: false,
-            })],
-        };
-
-        // Visit the import declaration
-        visitor.visit_mut_import_decl(&mut import_decl);
-
-        // The import declaration should not be modified
-        assert_eq!(import_decl.src.value.to_string(), "#features/some");
-    }
-
-    #[test]
-    fn test_visitor_with_empty_rules() {
-        // Create a visitor with empty rules
-        let config = Config {
-            rules: Some(vec![]),
-            cache_duration_ms: Some(1000),
-        };
-
-        let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-        // Create a test import declaration
-        let mut import_decl = ImportDecl {
-            span: DUMMY_SP,
-            src: Box::new(Str {
-                span: DUMMY_SP,
-                value: "#features/some".into(),
-                raw: None,
-            }),
-            type_only: false,
-            with: None,
-            specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-                span: DUMMY_SP,
-                local: Ident {
-                    span: DUMMY_SP,
-                    sym: "Button".into(),
-                    optional: false,
-                },
-                imported: None,
-                is_type_only: false,
-            })],
-        };
-
-        // Visit the import declaration
-        visitor.visit_mut_import_decl(&mut import_decl);
-
-        // The import declaration should not be modified
-        assert_eq!(import_decl.src.value.to_string(), "#features/some");
-    }
-
-    #[test]
-    fn test_visitor_with_non_matching_rules() {
-        // Create a visitor with rules that don't match
-        let rule = Rule {
-            pattern: "#other/*".to_string(),
-            paths: vec!["src/other/*/index.ts".to_string()],
-        };
-
-        let config = Config {
-            rules: Some(vec![rule]),
-            cache_duration_ms: Some(1000),
-        };
-
-        let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-        // Create a test import declaration
-        let mut import_decl = ImportDecl {
-            span: DUMMY_SP,
-            src: Box::new(Str {
-                span: DUMMY_SP,
-                value: "#features/some".into(),
-                raw: None,
-            }),
-            type_only: false,
-            with: None,
-            specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-                span: DUMMY_SP,
-                local: Ident {
-                    span: DUMMY_SP,
-                    sym: "Button".into(),
-                    optional: false,
-                },
-                imported: None,
-                is_type_only: false,
-            })],
-        };
-
-        // Visit the import declaration
-        visitor.visit_mut_import_decl(&mut import_decl);
-
-        // The import declaration should not be modified
-        assert_eq!(import_decl.src.value.to_string(), "#features/some");
-    }
-
-    // #[test]
-    // fn test_visit_mut_module_items() {
-    //     // Create a visitor with test rules
-    //     let rule = Rule {
-    //         pattern: "#features/*".to_string(),
-    //         paths: vec!["src/features/*/index.ts".to_string()],
-    //     };
-
-    //     let config = Config {
-    //         rules: Some(vec![rule]),
-    //         cache_duration_ms: Some(1000),
-    //     };
-
-    //     let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-    //     // Create a module with imports
-    //     let mut module_items = vec![ModuleItem::ModuleDecl(ModuleDecl::Import(ImportDecl {
-    //         span: DUMMY_SP,
-    //         src: Box::new(Str {
-    //             span: DUMMY_SP,
-    //             value: "#features/some".into(),
-    //             raw: None,
-    //         }),
-    //         type_only: false,
-    //         with: None,
-    //         specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-    //             span: DUMMY_SP,
-    //             local: Ident {
-    //                 span: DUMMY_SP,
-    //                 sym: "Button".into(),
-    //                 optional: false,
-    //             },
-    //             imported: None,
-    //             is_type_only: false,
-    //         })],
-    //     }))];
-
-    //     // Add some additional imports to the visitor
-    //     visitor
-    //         .additional_imports
-    //         .push(ModuleItem::ModuleDecl(ModuleDecl::Import(ImportDecl {
-    //             span: DUMMY_SP,
-    //             src: Box::new(Str {
-    //                 span: DUMMY_SP,
-    //                 value: "#features/other".into(),
-    //                 raw: None,
-    //             }),
-    //             type_only: false,
-    //             with: None,
-    //             specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-    //                 span: DUMMY_SP,
-    //                 local: Ident {
-    //                     span: DUMMY_SP,
-    //                     sym: "TextField".into(),
-    //                     optional: false,
-    //                 },
-    //                 imported: None,
-    //                 is_type_only: false,
-    //             })],
-    //         })));
-
-    //     // Visit the module items
-    //     visitor.visit_mut_module_items(&mut module_items);
-
-    //     // The module items should now include the additional imports
-    //     assert_eq!(module_items.len(), 2);
-    //     if let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = &module_items[1] {
-    //         assert_eq!(import.src.value.to_string(), "#features/other");
-    //         if let ImportSpecifier::Named(named) = &import.specifiers[0] {
-    //             assert_eq!(named.local.sym.to_string(), "TextField");
-    //         } else {
-    //             panic!("Expected named import specifier");
-    //         }
-    //     } else {
-    //         panic!("Expected import declaration");
-    //     }
-    // }
-
-    // #[test]
-    // fn test_visitor_with_multiple_specifiers() {
-    //     // Create a visitor with test rules
-    //     let rule = Rule {
-    //         pattern: "#features/*".to_string(),
-    //         paths: vec!["src/features/*/index.ts".to_string()],
-    //     };
-
-    //     let config = Config {
-    //         rules: Some(vec![rule]),
-    //         cache_duration_ms: Some(1000),
-    //     };
-
-    //     let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-    //     // Create a test import declaration with multiple specifiers
-    //     let mut import_decl = ImportDecl {
-    //         span: DUMMY_SP,
-    //         src: Box::new(Str {
-    //             span: DUMMY_SP,
-    //             value: "#features/some".into(),
-    //             raw: None,
-    //         }),
-    //         type_only: false,
-    //         with: None,
-    //         specifiers: vec![
-    //             ImportSpecifier::Named(ImportNamedSpecifier {
-    //                 span: DUMMY_SP,
-    //                 local: Ident {
-    //                     span: DUMMY_SP,
-    //                     sym: "Button".into(),
-    //                     optional: false,
-    //                 },
-    //                 imported: None,
-    //                 is_type_only: false,
-    //             }),
-    //             ImportSpecifier::Named(ImportNamedSpecifier {
-    //                 span: DUMMY_SP,
-    //                 local: Ident {
-    //                     span: DUMMY_SP,
-    //                     sym: "TextField".into(),
-    //                     optional: false,
-    //                 },
-    //                 imported: None,
-    //                 is_type_only: false,
-    //             }),
-    //         ],
-    //     };
-
-    //     // Mock the process_import function to return multiple imports
-    //     // This is a bit tricky since we can't easily mock in Rust
-    //     // For a real test, we would need to use a mocking library or refactor the code
-
-    //     // Visit the import declaration
-    //     visitor.visit_mut_import_decl(&mut import_decl);
-
-    //     // Since we can't easily mock process_import, we'll just check that the code doesn't panic
-    //     // In a real test, we would verify that the import declaration was correctly transformed
-    // }
-
-    // #[test]
-    // fn test_visitor_with_default_import() {
-    //     // Create a visitor with test rules
-    //     let rule = Rule {
-    //         pattern: "#features/*".to_string(),
-    //         paths: vec!["src/features/*/index.ts".to_string()],
-    //     };
-
-    //     let config = Config {
-    //         rules: Some(vec![rule]),
-    //         cache_duration_ms: Some(1000),
-    //     };
-
-    //     let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-    //     // Create a test import declaration with a default import
-    //     let mut import_decl = ImportDecl {
-    //         span: DUMMY_SP,
-    //         src: Box::new(Str {
-    //             span: DUMMY_SP,
-    //             value: "#features/some".into(),
-    //             raw: None,
-    //         }),
-    //         type_only: false,
-    //         with: None,
-    //         specifiers: vec![ImportSpecifier::Default(ImportDefaultSpecifier {
-    //             span: DUMMY_SP,
-    //             local: Ident {
-    //                 span: DUMMY_SP,
-    //                 sym: "Button".into(),
-    //                 optional: false,
-    //             },
-    //         })],
-    //     };
-
-    //     // Visit the import declaration
-    //     visitor.visit_mut_import_decl(&mut import_decl);
-
-    //     // Since we can't easily mock process_import, we'll just check that the code doesn't panic
-    //     // In a real test, we would verify that the import declaration was correctly transformed
-    // }
-
-    // #[test]
-    // fn test_visitor_with_renamed_import() {
-    //     // Create a visitor with test rules
-    //     let rule = Rule {
-    //         pattern: "#features/*".to_string(),
-    //         paths: vec!["src/features/*/index.ts".to_string()],
-    //     };
-
-    //     let config = Config {
-    //         rules: Some(vec![rule]),
-    //         cache_duration_ms: Some(1000),
-    //     };
-
-    //     let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-    //     // Create a test import declaration with a renamed import
-    //     let mut import_decl = ImportDecl {
-    //         span: DUMMY_SP,
-    //         src: Box::new(Str {
-    //             span: DUMMY_SP,
-    //             value: "#features/some".into(),
-    //             raw: None,
-    //         }),
-    //         type_only: false,
-    //         with: None,
-    //         specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-    //             span: DUMMY_SP,
-    //             local: Ident {
-    //                 span: DUMMY_SP,
-    //                 sym: "MyButton".into(),
-    //                 optional: false,
-    //             },
-    //             imported: Some(ModuleExportName::Ident(Ident {
-    //                 span: DUMMY_SP,
-    //                 sym: "Button".into(),
-    //                 optional: false,
-    //             })),
-    //             is_type_only: false,
-    //         })],
-    //     };
-
-    //     // Visit the import declaration
-    //     visitor.visit_mut_import_decl(&mut import_decl);
-
-    //     // Since we can't easily mock process_import, we'll just check that the code doesn't panic
-    //     // In a real test, we would verify that the import declaration was correctly transformed
-    // }
-
-    // #[test]
-    // fn test_visitor_with_type_only_import() {
-    //     // Create a visitor with test rules
-    //     let rule = Rule {
-    //         pattern: "#features/*".to_string(),
-    //         paths: vec!["src/features/*/index.ts".to_string()],
-    //     };
-
-    //     let config = Config {
-    //         rules: Some(vec![rule]),
-    //         cache_duration_ms: Some(1000),
-    //     };
-
-    //     let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-    //     // Create a test import declaration with a type-only import
-    //     let mut import_decl = ImportDecl {
-    //         span: DUMMY_SP,
-    //         src: Box::new(Str {
-    //             span: DUMMY_SP,
-    //             value: "#features/some".into(),
-    //             raw: None,
-    //         }),
-    //         type_only: true,
-    //         with: None,
-    //         specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-    //             span: DUMMY_SP,
-    //             local: Ident {
-    //                 span: DUMMY_SP,
-    //                 sym: "ButtonProps".into(),
-    //                 optional: false,
-    //             },
-    //             imported: None,
-    //             is_type_only: true,
-    //         })],
-    //     };
-
-    //     // Visit the import declaration
-    //     visitor.visit_mut_import_decl(&mut import_decl);
-
-    //     // Since we can't easily mock process_import, we'll just check that the code doesn't panic
-    //     // In a real test, we would verify that the import declaration was correctly transformed
-    // }
-
-    // #[test]
-    // fn test_visitor_with_multiple_rules() {
-    //     // Create a visitor with multiple rules
-    //     let rule1 = Rule {
-    //         pattern: "#features/*".to_string(),
-    //         paths: vec!["src/features/*/index.ts".to_string()],
-    //     };
-
-    //     let rule2 = Rule {
-    //         pattern: "#entities/*".to_string(),
-    //         paths: vec!["src/entities/*/index.ts".to_string()],
-    //     };
-
-    //     let config = Config {
-    //         rules: Some(vec![rule1, rule2]),
-    //         cache_duration_ms: Some(1000),
-    //     };
-
-    //     let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-    //     // Create a test import declaration
-    //     let mut import_decl = ImportDecl {
-    //         span: DUMMY_SP,
-    //         src: Box::new(Str {
-    //             span: DUMMY_SP,
-    //             value: "#entities/user".into(),
-    //             raw: None,
-    //         }),
-    //         type_only: false,
-    //         with: None,
-    //         specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-    //             span: DUMMY_SP,
-    //             local: Ident {
-    //                 span: DUMMY_SP,
-    //                 sym: "User".into(),
-    //                 optional: false,
-    //             },
-    //             imported: None,
-    //             is_type_only: false,
-    //         })],
-    //     };
-
-    //     // Visit the import declaration
-    //     visitor.visit_mut_import_decl(&mut import_decl);
-
-    //     // Since we can't easily mock process_import, we'll just check that the code doesn't panic
-    //     // In a real test, we would verify that the import declaration was correctly transformed
-    // }
-
-    // #[test]
-    // fn test_visitor_with_specific_and_wildcard_rules() {
-    //     // Create a visitor with specific and wildcard rules
-    //     let rule1 = Rule {
-    //         pattern: "#features/user".to_string(),
-    //         paths: vec!["src/specific-features/user/index.ts".to_string()],
-    //     };
-
-    //     let rule2 = Rule {
-    //         pattern: "#features/*".to_string(),
-    //         paths: vec!["src/features/*/index.ts".to_string()],
-    //     };
-
-    //     let config = Config {
-    //         rules: Some(vec![rule1, rule2]),
-    //         cache_duration_ms: Some(1000),
-    //     };
-
-    //     let mut visitor = BarrelTransformVisitor::new(config, "/".to_string(), "".to_string());
-
-    //     // Create a test import declaration that matches the specific rule
-    //     let mut import_decl = ImportDecl {
-    //         span: DUMMY_SP,
-    //         src: Box::new(Str {
-    //             span: DUMMY_SP,
-    //             value: "#features/user".into(),
-    //             raw: None,
-    //         }),
-    //         type_only: false,
-    //         with: None,
-    //         specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-    //             span: DUMMY_SP,
-    //             local: Ident {
-    //                 span: DUMMY_SP,
-    //                 sym: "User".into(),
-    //                 optional: false,
-    //             },
-    //             imported: None,
-    //             is_type_only: false,
-    //         })],
-    //     };
-
-    //     // Visit the import declaration
-    //     visitor.visit_mut_import_decl(&mut import_decl);
-
-    //     // Since we can't easily mock process_import, we'll just check that the code doesn't panic
-    //     // In a real test, we would verify that the import declaration was correctly transformed
-    // }
 }

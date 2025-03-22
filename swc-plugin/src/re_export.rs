@@ -85,7 +85,6 @@ fn validate_barrel_file(ast: &Module) -> Result<(), BarrelError> {
                 // Check that the export declaration only contains simple declarations
                 match &export_decl.decl {
                     Decl::Var(_) => {
-                        // Variable declarations are not allowed in barrel files
                         return Err(BarrelError::NonExportCode(
                             "Variable declarations are not allowed in barrel files".to_string(),
                         ));
@@ -127,45 +126,43 @@ fn validate_barrel_file(ast: &Module) -> Result<(), BarrelError> {
                     }
                 }
             }
-            ModuleItem::ModuleDecl(ModuleDecl::ExportAll(export_all)) => {
-                // Wildcard exports are not allowed
-                return Err(BarrelError::WildcardExport(format!(
-                    "export * from '{}'",
-                    export_all.src.value
-                )));
+            ModuleItem::ModuleDecl(ModuleDecl::ExportAll(_)) => {
+                return Err(BarrelError::WildcardExport(
+                    "Wildcard exports are not allowed in barrel files".to_string(),
+                ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultDecl(_)) => {
-                // Default export declarations are not allowed
                 return Err(BarrelError::NonExportCode(
                     "Default export declarations are not allowed in barrel files".to_string(),
                 ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(_)) => {
-                // Default export expressions are not allowed
                 return Err(BarrelError::NonExportCode(
                     "Default export expressions are not allowed in barrel files".to_string(),
                 ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::Import(_)) => {
-                // Import declarations are allowed (they might be needed for type information)
+                return Err(BarrelError::NonExportCode(
+                    "Import declarations are not allowed in barrel files".to_string(),
+                ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::TsImportEquals(_)) => {
-                // TypeScript import equals declarations are allowed
+                return Err(BarrelError::NonExportCode(
+                    "TypeScript import equals declarations are not allowed in barrel files"
+                        .to_string(),
+                ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::TsExportAssignment(_)) => {
-                // TypeScript export assignments are not allowed
                 return Err(BarrelError::NonExportCode(
                     "TypeScript export assignments are not allowed in barrel files".to_string(),
                 ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::TsNamespaceExport(_)) => {
-                // TypeScript namespace exports are not allowed
                 return Err(BarrelError::NonExportCode(
                     "TypeScript namespace exports are not allowed in barrel files".to_string(),
                 ));
             }
             ModuleItem::Stmt(_) => {
-                // Statements are not allowed
                 return Err(BarrelError::NonExportCode(
                     "Statements are not allowed in barrel files".to_string(),
                 ));
@@ -187,7 +184,6 @@ fn validate_barrel_file(ast: &Module) -> Result<(), BarrelError> {
 ///
 /// A list of re-exports if the file is a valid barrel file, `Err` otherwise
 pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport>, BarrelError> {
-    // Validate that the file only contains re-exports
     validate_barrel_file(ast)?;
 
     let mut re_exports = Vec::new();
@@ -225,7 +221,6 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                                 is_default: original_name == "default",
                             });
                         } else {
-                            // Export without source is not supported
                             return Err(BarrelError::MissingSource(format!(
                                 "Export '{}' does not have a source",
                                 exported_name
@@ -243,7 +238,6 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                                 is_default: true,
                             });
                         } else {
-                            // Export without source is not supported
                             return Err(BarrelError::MissingSource(format!(
                                 "Default export does not have a source"
                             )));
@@ -258,13 +252,11 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                         if let Some(src) = &export.src {
                             let source_path = src.value.to_string();
 
-                            // Namespace exports are not supported for direct optimization
                             return Err(BarrelError::NamespaceExport(format!(
                                 "export * as {} from '{}'",
                                 exported_name, source_path
                             )));
                         } else {
-                            // Export without source is not supported
                             return Err(BarrelError::MissingSource(format!(
                                 "Namespace export '{}' does not have a source",
                                 exported_name
@@ -273,12 +265,10 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                     }
                 }
             }
-        } else if let ModuleItem::ModuleDecl(ModuleDecl::ExportAll(export_all)) = item {
-            // Wildcard exports are not supported
-            return Err(BarrelError::WildcardExport(format!(
-                "export * from '{}'",
-                export_all.src.value
-            )));
+        } else if let ModuleItem::ModuleDecl(ModuleDecl::ExportAll(_)) = item {
+            return Err(BarrelError::WildcardExport(
+                "Wildcard exports are not allowed in barrel files".to_string(),
+            ));
         }
     }
 
@@ -327,7 +317,18 @@ mod tests {
 
         module.body.push(ModuleItem::ModuleDecl(named_export));
 
-        // Add an import declaration (should be allowed)
+        // Validate the barrel file
+        let result = validate_barrel_file(&module);
+        assert!(result.is_ok());
+
+        // Create an invalid barrel file AST with a import declaration
+        let mut module = Module {
+            span: DUMMY_SP,
+            body: vec![],
+            shebang: None,
+        };
+
+        // Add an import declaration
         let import_decl = ModuleDecl::Import(ImportDecl {
             span: DUMMY_SP,
             specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
@@ -353,7 +354,11 @@ mod tests {
 
         // Validate the barrel file
         let result = validate_barrel_file(&module);
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        match result {
+            Err(BarrelError::NonExportCode(_)) => {}
+            _ => panic!("Expected NonExportCode error"),
+        }
 
         // Create an invalid barrel file AST with a wildcard export
         let mut module = Module {
