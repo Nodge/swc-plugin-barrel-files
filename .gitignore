@@ -1,4 +1,5 @@
+node_modules
 .swc
 swc-plugin/example
 swc-plugin/target
-node_modules
+tests/fixtures
