@@ -10,7 +10,6 @@ mod re_export;
 mod resolver;
 
 use serde::Deserialize;
-// use swc_core::common::errors::HANDLER;
 // use swc_core::common::DUMMY_SP;
 use std::collections::HashMap;
 use swc_core::ecma::ast::{ImportDecl, Module, ModuleItem, Program};
@@ -137,17 +136,15 @@ impl VisitMut for BarrelTransformVisitor {
                     }
                 }
                 Err(e) => {
-                    // Report the error to SWC instead of panicking
-                    // let span = import_decl.span;
-                    // HANDLER.with(|handler| {
-                    //     handler
-                    //         .struct_span_err(
-                    //             span,
-                    //             &format!("Error processing barrel import: {}", e),
-                    //         )
-                    //         .emit();
-                    // });
-                    panic!("Error processing barrel import: {}", e)
+                    let handler = &swc_core::plugin::errors::HANDLER;
+                    handler.with(|handler| {
+                        handler
+                            .struct_span_err(
+                                import_decl.span,
+                                &format!("Error processing barrel import: {}", e),
+                            )
+                            .emit()
+                    });
                 }
             }
         }
@@ -211,14 +208,26 @@ pub fn process_transform(program: Program, metadata: TransformPluginProgramMetad
     let cwd = match metadata.get_context(&TransformPluginMetadataContextKind::Cwd) {
         Some(cwd) => cwd,
         None => {
-            panic!("Current working directory is not available");
+            let handler = &swc_core::plugin::errors::HANDLER;
+            handler.with(|handler| {
+                handler
+                    .struct_err("E_INVALID_ENV: Current working directory is not available")
+                    .emit()
+            });
+            return program;
         }
     };
 
     let filename = match metadata.get_context(&TransformPluginMetadataContextKind::Filename) {
         Some(filename) => filename,
         None => {
-            panic!("Current filename is not available");
+            let handler = &swc_core::plugin::errors::HANDLER;
+            handler.with(|handler| {
+                handler
+                    .struct_err("E_INVALID_ENV: Current filename is not available")
+                    .emit()
+            });
+            return program;
         }
     };
 
@@ -229,7 +238,19 @@ pub fn process_transform(program: Program, metadata: TransformPluginProgramMetad
     ) {
         Ok(config) => config,
         Err(e) => {
-            panic!("Error parsing barrel plugin configuration: {}", e);
+            let handler = &swc_core::plugin::errors::HANDLER;
+            handler.with(|handler| {
+                handler
+                    .struct_err(
+                        format!(
+                            "E_INVALID_CONFIG: Error parsing barrel plugin configuration: {}",
+                            e
+                        )
+                        .as_str(),
+                    )
+                    .emit()
+            });
+            return program;
         }
     };
 

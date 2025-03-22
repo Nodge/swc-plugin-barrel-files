@@ -64,7 +64,7 @@ pub fn resolve_to_virtual_path(cwd: &str, path: &str) -> Result<String, String> 
 
     if Path::new(&path).is_absolute() {
         return Err(format!(
-            "Absolute paths not starting with cwd are not supported: {}",
+            "E_INVALID_FILE_PATH: Absolute paths not starting with cwd are not supported: {}",
             path
         ));
     }
@@ -252,7 +252,7 @@ mod tests {
         assert!(resolve_to_virtual_path(cwd, path).is_err());
         assert_eq!(
             resolve_to_virtual_path(cwd, path).unwrap_err(),
-            "Absolute paths not starting with cwd are not supported: /other/path/file.rs"
+            "E_INVALID_FILE_PATH: Absolute paths not starting with cwd are not supported: /other/path/file.rs"
         );
     }
 

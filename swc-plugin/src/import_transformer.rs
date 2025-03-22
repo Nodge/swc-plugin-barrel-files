@@ -121,7 +121,7 @@ fn transform_import(
             }
             ImportSpecifier::Namespace(_) => {
                 return Err(
-                    "Namespace imports are not supported for barrel file optimization".to_string(),
+                    "E_NO_NAMESPACE_IMPORTS: Namespace imports are not supported for barrel file optimization".to_string(),
                 );
             }
         }
@@ -130,7 +130,7 @@ fn transform_import(
     // Check if any imports were not found in the barrel file
     if !missing_exports.is_empty() {
         return Err(format!(
-            "The following exports were not found in the barrel file {}: {}",
+            "E_UNRESOLVED_EXPORTS: The following exports were not found in the barrel file {}: {}",
             barrel_file,
             missing_exports.join(", ")
         ));
@@ -164,7 +164,7 @@ fn parse_file(file_path: &str) -> Result<Module, String> {
 
     let fm = match cm.load_file(Path::new(file_path)) {
         Ok(fm) => fm,
-        Err(e) => return Err(format!("Failed to load file: {}", e)),
+        Err(e) => return Err(format!("E_FILE_READ: Failed to load file: {}", e)),
     };
 
     let syntax = Syntax::Typescript(TsConfig {
@@ -177,7 +177,7 @@ fn parse_file(file_path: &str) -> Result<Module, String> {
 
     match parse_file_as_module(&fm, syntax, Default::default(), None, &mut vec![]) {
         Ok(module) => Ok(module),
-        Err(e) => Err(format!("Failed to parse file: {:?}", e)),
+        Err(e) => Err(format!("E_FILE_PARSE: Failed to parse file: {:?}", e)),
     }
 }
 
@@ -196,11 +196,17 @@ fn parse_barrel_file_exports(file_path: &str) -> Result<Vec<ReExport>, String> {
     match analyze_barrel_file(&ast, file_path) {
         Ok(re_exports) => {
             if re_exports.is_empty() {
-                return Err(format!("No re-exports found in barrel file: {}", file_path));
+                return Err(format!(
+                    "E_UNRESOLVED_EXPORTS: No re-exports found in barrel file: {}",
+                    file_path
+                ));
             }
             Ok(re_exports)
         }
-        Err(e) => Err(format!("Invalid barrel file {}: {}", file_path, e)),
+        Err(e) => Err(format!(
+            "E_INVALID_BARREL_FILE: Invalid barrel file {}: {}",
+            file_path, e
+        )),
     }
 }
 
@@ -231,14 +237,14 @@ pub fn process_import(
             Some(path) => path,
             None => {
                 return Err(format!(
-                    "Could not resolve barrel file for import from {}",
+                    "E_BARREL_FILE_NOT_FOUND: Could not resolve barrel file for import from {}",
                     import_source,
                 ));
             }
         },
         Err(e) => {
             return Err(format!(
-                "Could not resolve barrel file for {}: {}",
+                "E_BARREL_FILE_NOT_FOUND: Could not resolve barrel file for {}: {}",
                 import_source, e
             ));
         }
@@ -248,7 +254,7 @@ pub fn process_import(
         Ok(exports) => exports,
         Err(e) => {
             return Err(format!(
-                "Error analyzing barrel file {}: {}",
+                "E_INVALID_BARREL_FILE: Error analyzing barrel file {}: {}",
                 barrel_file, e
             ));
         }
@@ -259,7 +265,7 @@ pub fn process_import(
         Ok(path) => path,
         Err(e) => {
             return Err(format!(
-                "Error resolving source file {}: {}",
+                "E_SOURCE_FILE_NOT_FOUND: Error resolving source file {}: {}",
                 source_file, e
             ))
         }
@@ -269,7 +275,7 @@ pub fn process_import(
     match transform_import(&source_dir, import_decl, &barrel_file, &re_exports) {
         Ok(new_imports) => Ok(new_imports),
         Err(e) => Err(format!(
-            "Error transforming import from {}: {}",
+            "E_TRANSFORM_FAILED: Error transforming import from {}: {}",
             import_source, e
         )),
     }
