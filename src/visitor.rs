@@ -101,7 +101,6 @@ impl VisitMut for BarrelTransformVisitor {
                         // We'll use this to identify the import in visit_mut_module_items
                         let span_lo = import_decl.span.lo.0;
 
-                        // Store all the replacement imports
                         self.import_replacements
                             .insert(span_lo, new_imports.clone());
                     }
@@ -124,49 +123,41 @@ impl VisitMut for BarrelTransformVisitor {
     }
 
     fn visit_mut_module_items(&mut self, items: &mut Vec<ModuleItem>) {
-        // First, collect all import declarations and their positions
-        let mut import_positions = Vec::new();
-        for (i, item) in items.iter().enumerate() {
-            if let ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import)) = item {
-                import_positions.push((i, import.span.lo.0));
-            }
-        }
-
-        // Now visit all items
+        // First, visit all items to collect replacements
         for item in items.iter_mut() {
             item.visit_mut_with(self);
         }
 
-        // Then replace original imports with their replacements
-        if !self.import_replacements.is_empty() {
-            // Process imports in reverse order to avoid invalidating indices
-            import_positions.sort_by(|a, b| b.0.cmp(&a.0));
+        // Collect all the changes we need to make
+        let mut changes = Vec::new();
 
-            for (pos, span_lo) in import_positions {
-                if let Some(mut replacements) = self.import_replacements.get(&span_lo).cloned() {
-                    // Sort replacements by module source
+        for (i, item) in items.iter().enumerate() {
+            if let ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import)) = item {
+                if let Some(mut replacements) =
+                    self.import_replacements.get(&import.span.lo.0).cloned()
+                {
                     replacements
                         .sort_by(|a, b| a.src.value.to_string().cmp(&b.src.value.to_string()));
-
-                    // Remove the original import
-                    items.remove(pos);
-
-                    // Insert all replacements at the position of the removed import
-                    let mut insert_pos = pos;
-
-                    for import in replacements.iter() {
-                        items.insert(
-                            insert_pos,
-                            ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(
-                                import.clone(),
-                            )),
-                        );
-                        insert_pos += 1;
-                    }
+                    changes.push((i, replacements));
                 }
             }
+        }
 
-            self.import_replacements.clear();
+        // Apply all changes, starting from the end to avoid invalidating indices
+        for (index, replacements) in changes.into_iter().rev() {
+            // Remove the original import
+            items.remove(index);
+
+            // Insert all replacements at the position of the removed import
+            let mut insert_pos = index;
+
+            for import in replacements.iter() {
+                items.insert(
+                    insert_pos,
+                    ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import.clone())),
+                );
+                insert_pos += 1;
+            }
         }
     }
 }
