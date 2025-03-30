@@ -663,6 +663,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "path-absolutize"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4af381fe79fa195b4909485d99f73a80792331df0625188e707854f0b3383f5"
+dependencies = [
+ "path-dedot",
+]
+
+[[package]]
+name = "path-dedot"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07ba0ad7e047712414213ff67533e6dd477af0a4e1d14fb52343e53d30ea9397"
+dependencies = [
+ "once_cell",
+]
+
+[[package]]
 name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1213,7 +1231,6 @@ dependencies = [
  "swc_common",
  "swc_ecma_ast",
  "swc_ecma_parser",
- "swc_ecma_quote_macros",
  "swc_ecma_transforms_base",
  "swc_ecma_transforms_testing",
  "swc_ecma_visit",
@@ -1293,23 +1310,6 @@ dependencies = [
  "swc_ecma_ast",
  "tracing",
  "typed-arena",
-]
-
-[[package]]
-name = "swc_ecma_quote_macros"
-version = "0.52.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2bd72fda3eb232e08ac6ce9766edb59791dab5f588377c151a1da6c1862b734"
-dependencies = [
- "anyhow",
- "proc-macro2",
- "quote",
- "swc_atoms",
- "swc_common",
- "swc_ecma_ast",
- "swc_ecma_parser",
- "swc_macros_common",
- "syn 2.0.48",
 ]
 
 [[package]]
@@ -1455,13 +1455,13 @@ name = "swc_plugin_barrel_files"
 version = "0.1.0"
 dependencies = [
  "once_cell",
+ "path-absolutize",
  "pathdiff",
  "regex",
  "serde",
  "serde_json",
  "swc_core",
  "swc_ecma_utils",
- "tempfile",
  "testing",
 ]
 

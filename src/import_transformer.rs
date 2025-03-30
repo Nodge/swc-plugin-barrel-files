@@ -72,19 +72,24 @@ fn transform_import(
                         let new_specifier = ImportSpecifier::Named(ImportNamedSpecifier {
                             span: named.span,
                             local: named.local.clone(),
-                            imported: if named.imported.is_some() {
-                                named.imported.clone()
-                            } else if re_export.original_name != imported_name
-                                && !re_export.is_default
-                            {
-                                Some(ModuleExportName::Ident(swc_core::ecma::ast::Ident {
-                                    span: DUMMY_SP,
-                                    sym: re_export.original_name.clone().into(),
-                                    optional: false,
-                                }))
-                            } else if re_export.is_default {
-                                None
+                            imported: if !re_export.is_default {
+                                // For named exports, check if we need to add the 'as' clause
+                                if re_export.original_name != named.local.sym.to_string() {
+                                    // Only add the 'as' clause when the original name is different from the local name
+                                    // This handles both cases:
+                                    // 1. When the export was renamed in the barrel file (setVisible as toggle)
+                                    // 2. When the import is renamed in the consumer file (toggle as switcher)
+                                    Some(ModuleExportName::Ident(swc_core::ecma::ast::Ident {
+                                        span: DUMMY_SP,
+                                        sym: re_export.original_name.clone().into(),
+                                        optional: false,
+                                    }))
+                                } else {
+                                    // If the original name is the same as the local name, don't add the 'as' clause
+                                    None
+                                }
                             } else {
+                                // For default exports, we don't need to specify the imported name
                                 None
                             },
                             is_type_only: named.is_type_only,

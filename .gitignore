@@ -2,3 +2,4 @@ node_modules
 .swc
 target
 tests/fixtures
+swc_plugin_barrel_files.wasm

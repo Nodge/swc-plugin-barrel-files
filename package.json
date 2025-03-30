@@ -4,7 +4,8 @@
     "description": "",
     "main": "index.js",
     "scripts": {
-        "build": "cd swc-plugin && cargo build --target wasm32-wasi --release",
+        "build": "cargo build-wasip1 --release",
+        "postbuild": "cp target/wasm32-wasip1/release/swc_plugin_barrel_files.wasm .",
         "test": "vitest run",
         "test:watch": "vitest"
     },

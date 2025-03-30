@@ -23,9 +23,7 @@ async function transpileWithSwc({ filename, code, config }: { filename: string; 
         },
         jsc: {
             experimental: {
-                plugins: [
-                    [require.resolve("../swc-plugin/target/wasm32-wasi/release/swc_plugin_barrel_files.wasm"), config],
-                ],
+                plugins: [[require.resolve("../swc_plugin_barrel_files.wasm"), config]],
             },
         },
     });
@@ -161,7 +159,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should transform imports with renaming", async () => {
+    it("it should transform imports with renamed import", async () => {
         await file("src/features/renamed/index.ts", 'export { Modal } from "./components/Modal";');
 
         const outputCode = await transpileWithSwc({
@@ -180,7 +178,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should transform barrel file with renamed exports", async () => {
+    it("it should transform barrel file with renamed export", async () => {
         await file(
             "src/features/renamed-exports/index.ts",
             'export { setVisible as toggle } from "./model/visibility";',
@@ -198,6 +196,28 @@ describe("SWC Barrel Files Transformation", () => {
         expect(outputCode).toMatchInlineSnapshot(`
           "import { setVisible as toggle } from "../../features/renamed-exports/model/visibility";
           console.log(toggle);
+          "
+        `);
+    });
+
+    it("it should transform barrel file with renamed import and export", async () => {
+        await file(
+            "src/features/renamed-exports/index.ts",
+            'export { setVisible as toggle } from "./model/visibility";',
+        );
+
+        const outputCode = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/renamed-exports.ts"),
+            code: `
+                import { toggle as switcher } from "#features/renamed-exports";
+                console.log(switcher);
+            `,
+            config: defaultConfig,
+        });
+
+        expect(outputCode).toMatchInlineSnapshot(`
+          "import { setVisible as switcher } from "../../features/renamed-exports/model/visibility";
+          console.log(switcher);
           "
         `);
     });
