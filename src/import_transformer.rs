@@ -17,6 +17,95 @@ use swc_core::ecma::ast::{
 };
 use swc_core::ecma::parser::{parse_file_as_module, Syntax, TsConfig};
 
+/// Finds a re-export by name in the list of re-exports
+fn find_re_export_by_name<'a>(re_exports: &'a [ReExport], name: &str) -> Option<&'a ReExport> {
+    re_exports.iter().find(|e| e.exported_name == name)
+}
+
+/// Finds a default re-export in the list of re-exports
+fn find_default_re_export<'a>(re_exports: &'a [ReExport]) -> Option<&'a ReExport> {
+    re_exports.iter().find(|e| e.is_default)
+}
+
+/// Resolves the import path from the barrel file directory and re-export source path
+fn resolve_import_path(barrel_file_dir: &str, source_dir: &str, re_export: &ReExport) -> String {
+    if !re_export.source_path.starts_with('.') {
+        return re_export.source_path.clone();
+    }
+
+    let target_path = path_join(barrel_file_dir, &re_export.source_path);
+    resolve_relative_path(source_dir, &target_path).unwrap()
+}
+
+/// Creates a default import specifier
+fn create_default_specifier(
+    span: swc_core::common::Span,
+    local_name: &swc_core::ecma::ast::Ident,
+) -> ImportSpecifier {
+    ImportSpecifier::Default(ImportDefaultSpecifier {
+        span,
+        local: local_name.clone(),
+    })
+}
+
+/// Creates a named import specifier
+fn create_named_specifier(
+    span: swc_core::common::Span,
+    local_name: &swc_core::ecma::ast::Ident,
+    re_export: &ReExport,
+    is_type_only: bool,
+) -> ImportSpecifier {
+    ImportSpecifier::Named(ImportNamedSpecifier {
+        span,
+        local: local_name.clone(),
+        imported: if !re_export.is_default {
+            // For named exports, check if we need to add the 'as' clause
+            if re_export.original_name != local_name.sym.to_string() {
+                // Only add the 'as' clause when the original name is different from the local name
+                // This handles both cases:
+                // 1. When the export was renamed in the barrel file (setVisible as toggle)
+                // 2. When the import is renamed in the consumer file (toggle as switcher)
+                Some(ModuleExportName::Ident(swc_core::ecma::ast::Ident {
+                    span: DUMMY_SP,
+                    sym: re_export.original_name.clone().into(),
+                    optional: false,
+                }))
+            } else {
+                // If the original name is the same as the local name, don't add the 'as' clause
+                None
+            }
+        } else {
+            // For default exports, we don't need to specify the imported name
+            None
+        },
+        is_type_only,
+    })
+}
+
+/// Adds an import specifier to the new_imports HashMap
+fn add_import_specifier(
+    new_imports: &mut HashMap<String, Vec<ImportSpecifier>>,
+    import_path: String,
+    specifier: ImportSpecifier,
+) {
+    new_imports
+        .entry(import_path)
+        .or_insert_with(Vec::new)
+        .push(specifier);
+}
+
+/// Extracts the imported name from a named import specifier
+fn extract_imported_name(named: &ImportNamedSpecifier) -> String {
+    named
+        .imported
+        .as_ref()
+        .map(|name| match name {
+            ModuleExportName::Ident(ident) => ident.sym.to_string(),
+            ModuleExportName::Str(str) => str.value.to_string(),
+        })
+        .unwrap_or_else(|| named.local.sym.to_string())
+}
+
 /// Transforms an import declaration by replacing barrel imports with direct imports
 ///
 /// # Arguments
@@ -43,82 +132,34 @@ fn transform_import(
     for specifier in &import_decl.specifiers {
         match specifier {
             ImportSpecifier::Named(named) => {
-                let imported_name = named
-                    .imported
-                    .as_ref()
-                    .map(|name| match name {
-                        ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                        ModuleExportName::Str(str) => str.value.to_string(),
-                    })
-                    .unwrap_or_else(|| named.local.sym.to_string());
+                let imported_name = extract_imported_name(named);
 
-                if let Some(re_export) =
-                    re_exports.iter().find(|e| e.exported_name == imported_name)
-                {
-                    let target_path = path_join(&barrel_file_dir, &re_export.source_path);
-                    let import_path = resolve_relative_path(source_dir, &target_path).unwrap();
+                if let Some(re_export) = find_re_export_by_name(re_exports, &imported_name) {
+                    let import_path = resolve_import_path(&barrel_file_dir, source_dir, re_export);
 
-                    if re_export.is_default {
-                        let default_specifier = ImportSpecifier::Default(ImportDefaultSpecifier {
-                            span: named.span,
-                            local: named.local.clone(),
-                        });
-
-                        new_imports
-                            .entry(import_path.clone())
-                            .or_insert_with(Vec::new)
-                            .push(default_specifier);
+                    let new_specifier = if re_export.is_default {
+                        create_default_specifier(named.span, &named.local)
                     } else {
-                        let new_specifier = ImportSpecifier::Named(ImportNamedSpecifier {
-                            span: named.span,
-                            local: named.local.clone(),
-                            imported: if !re_export.is_default {
-                                // For named exports, check if we need to add the 'as' clause
-                                if re_export.original_name != named.local.sym.to_string() {
-                                    // Only add the 'as' clause when the original name is different from the local name
-                                    // This handles both cases:
-                                    // 1. When the export was renamed in the barrel file (setVisible as toggle)
-                                    // 2. When the import is renamed in the consumer file (toggle as switcher)
-                                    Some(ModuleExportName::Ident(swc_core::ecma::ast::Ident {
-                                        span: DUMMY_SP,
-                                        sym: re_export.original_name.clone().into(),
-                                        optional: false,
-                                    }))
-                                } else {
-                                    // If the original name is the same as the local name, don't add the 'as' clause
-                                    None
-                                }
-                            } else {
-                                // For default exports, we don't need to specify the imported name
-                                None
-                            },
-                            is_type_only: named.is_type_only,
-                        });
+                        create_named_specifier(
+                            named.span,
+                            &named.local,
+                            re_export,
+                            named.is_type_only,
+                        )
+                    };
 
-                        new_imports
-                            .entry(import_path.clone())
-                            .or_insert_with(Vec::new)
-                            .push(new_specifier);
-                    }
+                    add_import_specifier(&mut new_imports, import_path, new_specifier);
                 } else {
                     missing_exports.push(imported_name.clone());
                 }
             }
             ImportSpecifier::Default(default) => {
                 // Look for a re-export of the default export
-                if let Some(re_export) = re_exports.iter().find(|e| e.is_default) {
-                    let target_path = path_join(&barrel_file_dir, &re_export.source_path);
-                    let import_path = resolve_relative_path(source_dir, &target_path).unwrap();
+                if let Some(re_export) = find_default_re_export(re_exports) {
+                    let import_path = resolve_import_path(&barrel_file_dir, source_dir, re_export);
+                    let new_specifier = create_default_specifier(default.span, &default.local);
 
-                    let new_specifier = ImportSpecifier::Default(ImportDefaultSpecifier {
-                        span: default.span,
-                        local: default.local.clone(),
-                    });
-
-                    new_imports
-                        .entry(import_path.clone())
-                        .or_insert_with(Vec::new)
-                        .push(new_specifier);
+                    add_import_specifier(&mut new_imports, import_path, new_specifier);
                 } else {
                     // The default export was not found in the barrel file
                     missing_exports.push("default".to_string());

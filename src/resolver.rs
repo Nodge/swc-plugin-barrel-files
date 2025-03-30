@@ -57,8 +57,7 @@ pub fn resolve_barrel_file(
 pub fn resolve_to_virtual_path(cwd: &str, path: &str) -> Result<String, String> {
     if path.starts_with(cwd) {
         let without_cwd = &path[cwd.len() + 1..];
-        let new_path = Path::new(SWC_VIRTUAL_FS_ROOT_DIR).join(without_cwd);
-        let result = new_path.to_string_lossy().to_string();
+        let result = path_join(SWC_VIRTUAL_FS_ROOT_DIR, without_cwd);
         return Ok(result);
     }
 
@@ -69,8 +68,7 @@ pub fn resolve_to_virtual_path(cwd: &str, path: &str) -> Result<String, String> 
         ));
     }
 
-    let new_path = Path::new(SWC_VIRTUAL_FS_ROOT_DIR).join(path);
-    let result = new_path.to_string_lossy().to_string();
+    let result = path_join(SWC_VIRTUAL_FS_ROOT_DIR, path);
     return Ok(result);
 }
 
@@ -218,6 +216,20 @@ mod tests {
         assert_eq!(
             resolve_to_virtual_path(cwd, path).unwrap(),
             "/cwd/src/main.rs"
+        );
+
+        // Test with relative path starting with ./
+        let path = "./src/main.rs";
+        assert_eq!(
+            resolve_to_virtual_path(cwd, path).unwrap(),
+            "/cwd/src/main.rs"
+        );
+
+        // Test with nested ./ in the path
+        let path = "tests/./fixtures/src/features/f1/index.ts";
+        assert_eq!(
+            resolve_to_virtual_path(cwd, path).unwrap(),
+            "/cwd/tests/fixtures/src/features/f1/index.ts"
         );
 
         // Test with absolute path not starting with cwd

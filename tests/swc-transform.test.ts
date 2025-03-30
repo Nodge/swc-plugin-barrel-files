@@ -308,11 +308,10 @@ describe("SWC Barrel Files Transformation", () => {
                     pattern: "#entities/*",
                     paths: ["tests/fixtures/src/entities/*/index.ts"],
                 },
-                // TODO: так не работает, надо починить
-                // {
-                //     pattern: "#features/*",
-                //     paths: ["./tests/fixtures/src/features/*/index.ts"],
-                // },
+                {
+                    pattern: "#features/*",
+                    paths: ["./tests/fixtures/src/features/*/index.ts"],
+                },
             ],
         };
 
@@ -331,7 +330,7 @@ describe("SWC Barrel Files Transformation", () => {
 
         expect(outputCode).toMatchInlineSnapshot(`
           "import { Button } from "../../entities/e1/Button";
-          import { toggle } from "#features/f1";
+          import { toggle } from "../../features/f1/model";
           console.log(Button, toggle);
           "
         `);
@@ -468,9 +467,8 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        // TODO: здесь должен остаться оригинальный путь
         expect(outputCode).toMatchInlineSnapshot(`
-          "import { Button } from "../../../../../../root/src/components/Button";
+          "import { Button } from "/root/src/components/Button";
           console.log(Button);
           "
         `);
@@ -488,9 +486,8 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        // TODO: здесь должен остаться оригинальный путь
         expect(outputCode).toMatchInlineSnapshot(`
-          "import { Button } from "../../features/re-export/ui-lib";
+          "import { Button } from "ui-lib";
           console.log(Button);
           "
         `);
