@@ -2,7 +2,7 @@
 //!
 //! This module provides functionality for resolving barrel files.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::pattern_matcher::{apply_components_to_template, extract_pattern_components};
 
@@ -83,53 +83,23 @@ pub fn resolve_to_virtual_path(cwd: &str, path: &str) -> Result<String, String> 
 ///
 /// # Returns
 ///
-/// The relative path from source to target
+/// The relative path from source to target as an Option<String>
 pub fn resolve_relative_path(from_path: &str, to_path: &str) -> Option<String> {
-    let path = Path::new(to_path);
-    let base = Path::new(from_path);
+    let full_path = {
+        let mut path = PathBuf::from(from_path);
+        path.push(to_path);
 
-    if path.is_absolute() != base.is_absolute() {
-        if path.is_absolute() {
-            Some(PathBuf::from(path).to_string_lossy().to_string())
-        } else {
-            None
-        }
-    } else {
-        let mut ita = path.components();
-        let mut itb = base.components();
-        let mut comps: Vec<Component> = vec![];
+        path
+    };
 
-        loop {
-            match (ita.next(), itb.next()) {
-                (None, None) => break,
-                (Some(a), None) => {
-                    comps.push(a);
-                    comps.extend(ita.by_ref());
-                    break;
-                }
-                (None, _) => comps.push(Component::ParentDir),
-                (Some(a), Some(b)) if comps.is_empty() && a == b => (),
-                (Some(a), Some(b)) if b == Component::CurDir => comps.push(a),
-                (Some(_), Some(b)) if b == Component::ParentDir => return None,
-                (Some(a), Some(_)) => {
-                    comps.push(Component::ParentDir);
-                    for _ in itb {
-                        comps.push(Component::ParentDir);
-                    }
-                    comps.push(a);
-                    comps.extend(ita.by_ref());
-                    break;
-                }
-            }
-        }
-
-        if comps.is_empty() || comps[0] != Component::ParentDir {
-            comps.insert(0, Component::CurDir);
-        }
-
-        let path_buf: PathBuf = comps.iter().collect();
-        Some(path_buf.to_string_lossy().to_string())
+    let diff = pathdiff::diff_paths(full_path, &from_path)?;
+    if diff.starts_with("../") {
+        return diff.to_str().map(|s| s.to_string());
     }
+
+    let mut relative_diff = PathBuf::from("./");
+    relative_diff.push(diff);
+    relative_diff.to_str().map(|s| s.to_string())
 }
 
 /// Joins two path segments together, handling normalization of path components
@@ -227,7 +197,10 @@ mod tests {
             Some("./c".to_string())
         );
         // Same directory
-        assert_eq!(resolve_relative_path("/a/b", "/a/b"), Some(".".to_string()));
+        assert_eq!(
+            resolve_relative_path("/a/b", "/a/b"),
+            Some("./".to_string())
+        );
     }
 
     #[test]
