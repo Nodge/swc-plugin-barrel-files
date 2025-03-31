@@ -4,3 +4,4 @@ target
 tests/fixtures
 swc_plugin_barrel_files.wasm
 mise.toml
+todo.md
