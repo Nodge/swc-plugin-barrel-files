@@ -133,7 +133,6 @@ mod tests {
         let config = Config {
             aliases: Some(vec![rule2.clone(), rule1.clone()]),
             patterns: vec![],
-            cache_duration_ms: Some(1000),
         };
 
         let cwd = "/".to_string();
@@ -193,7 +192,6 @@ mod tests {
                 multiple_contexts_alias.clone(),
             ]),
             patterns: vec![],
-            cache_duration_ms: Some(1000),
         };
 
         // Test with source file in /cwd/src
@@ -243,7 +241,6 @@ mod tests {
                 other_context_alias.clone(),
             ]),
             patterns: vec![],
-            cache_duration_ms: Some(1000),
         };
 
         // Test with source file in /cwd/other
@@ -292,7 +289,6 @@ mod tests {
                 other_context_alias.clone(),
             ]),
             patterns: vec![],
-            cache_duration_ms: Some(1000),
         };
 
         // Test with source file in /cwd/tests which doesn't match any context
@@ -318,7 +314,6 @@ mod tests {
         let config = Config {
             aliases: Some(vec![]),
             patterns: vec![],
-            cache_duration_ms: Some(1000),
         };
 
         let cwd = "/cwd".to_string();
@@ -339,7 +334,6 @@ mod tests {
         let config = Config {
             aliases: None,
             patterns: vec![],
-            cache_duration_ms: Some(1000),
         };
 
         let cwd = "/cwd".to_string();
@@ -371,7 +365,6 @@ mod tests {
         let config = Config {
             aliases: Some(vec![alias_with_multiple_contexts.clone()]),
             patterns: vec![],
-            cache_duration_ms: Some(1000),
         };
 
         // Test with source file that matches multiple contexts

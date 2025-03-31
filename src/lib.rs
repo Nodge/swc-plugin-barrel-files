@@ -4,7 +4,6 @@
 //! from the source files. This helps to avoid circular dependencies and improves tree-shaking.
 
 mod alias_resolver;
-mod cache;
 mod config;
 mod import_transformer;
 mod paths;

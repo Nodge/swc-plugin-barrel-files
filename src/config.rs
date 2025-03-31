@@ -8,9 +8,6 @@ pub struct Config {
 
     /// Rules for resolving import aliases (optional)
     pub aliases: Option<Vec<Alias>>,
-
-    /// Cache duration in milliseconds (optional, defaults to 1000)
-    pub cache_duration_ms: Option<u64>,
 }
 
 /// Rule for resolving import aliases
@@ -59,6 +56,5 @@ mod tests {
         assert_eq!(patterns.len(), 2);
         assert_eq!(patterns[0], "src/entities/*/index.ts");
         assert_eq!(patterns[1], "src/features/*/index.ts");
-        assert_eq!(config.cache_duration_ms, Some(1000));
     }
 }

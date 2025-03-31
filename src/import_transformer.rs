@@ -111,7 +111,6 @@ fn extract_imported_name(named: &ImportNamedSpecifier) -> String {
 /// * `source_dir` - The directory containing the current source file
 /// * `import_decl` - The import declaration to transform
 /// * `barrel_file` - The path to the barrel file
-/// * `re_exports` - The re-exports from the barrel file
 ///
 /// # Returns
 ///
@@ -120,19 +119,20 @@ pub fn transform_import(
     source_dir: &str,
     import_decl: &ImportDecl,
     barrel_file: &str,
-    re_exports: &[ReExport],
 ) -> Result<Vec<ImportDecl>, String> {
     let mut new_imports = HashMap::new();
     let mut missing_exports = Vec::new();
 
     let barrel_file_dir = dirname(barrel_file);
 
+    let re_exports = parse_barrel_file_exports(&barrel_file)?;
+
     for specifier in &import_decl.specifiers {
         match specifier {
             ImportSpecifier::Named(named) => {
                 let imported_name = extract_imported_name(named);
 
-                if let Some(re_export) = find_re_export_by_name(re_exports, &imported_name) {
+                if let Some(re_export) = find_re_export_by_name(&re_exports, &imported_name) {
                     let import_path = resolve_import_path(&barrel_file_dir, source_dir, re_export);
 
                     let new_specifier = if re_export.is_default {
@@ -153,7 +153,7 @@ pub fn transform_import(
             }
             ImportSpecifier::Default(default) => {
                 // Look for a re-export of the default export
-                if let Some(re_export) = find_default_re_export(re_exports) {
+                if let Some(re_export) = find_default_re_export(&re_exports) {
                     let import_path = resolve_import_path(&barrel_file_dir, source_dir, re_export);
                     let new_specifier = create_default_specifier(default.span, &default.local);
 
@@ -234,7 +234,7 @@ fn parse_file(file_path: &str) -> Result<Module, String> {
 /// # Returns
 ///
 /// A list of re-exports if the file is a valid barrel file, `Err` otherwise
-pub fn parse_barrel_file_exports(file_path: &str) -> Result<Vec<ReExport>, String> {
+fn parse_barrel_file_exports(file_path: &str) -> Result<Vec<ReExport>, String> {
     let ast = parse_file(file_path)?;
 
     match analyze_barrel_file(&ast, file_path) {

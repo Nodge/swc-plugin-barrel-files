@@ -4,9 +4,8 @@ use swc_core::ecma::ast::{ImportDecl, Module, ModuleItem};
 use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 
 use crate::alias_resolver::AliasResolver;
-use crate::cache::FileCache;
 use crate::config::Config;
-use crate::import_transformer::{parse_barrel_file_exports, transform_import};
+use crate::import_transformer::transform_import;
 use crate::paths::{dirname, path_join, to_virtual_path};
 use crate::pattern_matcher::path_matches_pattern;
 
@@ -17,9 +16,6 @@ pub struct BarrelTransformVisitor {
 
     /// Virtual path to the directory for the current file
     source_dir: String,
-
-    /// File system cache
-    _file_cache: FileCache,
 
     /// Map of import declarations to their replacements
     /// The key is the span of the original import, and the value is a vector of replacement imports
@@ -35,8 +31,6 @@ pub struct BarrelTransformVisitor {
 impl BarrelTransformVisitor {
     /// Creates a new visitor with the specified configuration
     pub fn new(config: &Config, cwd: String, filename: String) -> Result<Self, String> {
-        let cache_duration_ms = config.cache_duration_ms.unwrap_or(1000);
-
         // Transform patterns to virtual paths
         let mut patterns = Vec::new();
         for pattern in &config.patterns {
@@ -57,7 +51,6 @@ impl BarrelTransformVisitor {
         Ok(BarrelTransformVisitor {
             cwd,
             source_dir,
-            _file_cache: FileCache::new(cache_duration_ms),
             import_replacements: HashMap::new(),
             alias_resolver,
             patterns,
@@ -86,9 +79,7 @@ impl BarrelTransformVisitor {
             return Ok(None);
         }
 
-        let re_exports = parse_barrel_file_exports(&barrel_file)?;
-        let new_imports =
-            transform_import(&self.source_dir, import_decl, &barrel_file, &re_exports)?;
+        let new_imports = transform_import(&self.source_dir, import_decl, &barrel_file)?;
 
         Ok(Some(new_imports))
     }
