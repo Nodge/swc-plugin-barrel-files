@@ -3,3 +3,4 @@ node_modules
 target
 tests/fixtures
 swc_plugin_barrel_files.wasm
+mise.toml
