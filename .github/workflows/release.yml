@@ -50,7 +50,7 @@ jobs:
               with:
                   title: "Upcoming Release"
                   commit: "chore(release): version bump"
-                  publish: pnpm ci:publish
+                  publish: pnpm ci:release
                   version: pnpm ci:version
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
