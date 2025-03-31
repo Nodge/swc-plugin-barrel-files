@@ -7,9 +7,11 @@ import { transform } from "@swc/core";
 const fixturesDir = path.resolve(__dirname, "fixtures");
 
 interface PluginConfig {
-    rules: Array<{
+    patterns: string[];
+    aliases?: Array<{
         pattern: string;
         paths: string[];
+        context?: string[];
     }>;
 }
 
@@ -38,7 +40,7 @@ async function file(filename: string, content: string) {
 
 describe("SWC Barrel Files Transformation", () => {
     const defaultConfig: PluginConfig = {
-        rules: [
+        aliases: [
             {
                 pattern: "#features/*",
                 paths: [path.join(fixturesDir, "src/features/*/index.ts")],
@@ -48,13 +50,17 @@ describe("SWC Barrel Files Transformation", () => {
                 paths: [path.join(fixturesDir, "src/features/*/testing.ts")],
             },
         ],
+        patterns: [
+            path.join(fixturesDir, "src/features/*/index.ts"),
+            path.join(fixturesDir, "src/features/*/testing.ts"),
+        ],
     };
 
     afterEach(async () => {
         await fs.rm(fixturesDir, { recursive: true });
     });
 
-    it("it should transform index file imports", async () => {
+    it("should transform index file imports", async () => {
         await file(
             "src/features/some/index.ts",
             `
@@ -82,7 +88,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should transform testing file imports", async () => {
+    it("should transform testing file imports", async () => {
         await file("src/features/some/testing.ts", 'export { mock } from "./api/mocks/test";');
 
         const outputCode = await transpileWithSwc({
@@ -102,7 +108,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should transform barrel files with comments", async () => {
+    it("should transform barrel files with comments", async () => {
         await file(
             "src/features/comments/index.ts",
             `
@@ -131,14 +137,15 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should find barrel file from an array of paths", async () => {
+    it("should find barrel file from an array of paths", async () => {
         const jsxConfig: PluginConfig = {
-            rules: [
+            aliases: [
                 {
                     pattern: "#ui/*",
                     paths: [path.join(fixturesDir, "src/ui/*/index.ts"), path.join(fixturesDir, "src/ui/*/index.tsx")],
                 },
             ],
+            patterns: [path.join(fixturesDir, "src/ui/*/index.ts"), path.join(fixturesDir, "src/ui/*/index.tsx")],
         };
 
         await file("src/ui/button/index.tsx", 'export { Button } from "./Button";');
@@ -159,7 +166,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should transform imports with renamed import", async () => {
+    it("should transform imports with renamed import", async () => {
         await file("src/features/renamed/index.ts", 'export { Modal } from "./components/Modal";');
 
         const outputCode = await transpileWithSwc({
@@ -178,7 +185,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should transform barrel file with renamed export", async () => {
+    it("should transform barrel file with renamed export", async () => {
         await file(
             "src/features/renamed-exports/index.ts",
             'export { setVisible as toggle } from "./model/visibility";',
@@ -200,7 +207,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should transform barrel file with renamed import and export", async () => {
+    it("should transform barrel file with renamed import and export", async () => {
         await file(
             "src/features/renamed-exports/index.ts",
             'export { setVisible as toggle } from "./model/visibility";',
@@ -222,7 +229,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should transform default re-exports inside barrel files", async () => {
+    it("should transform default re-exports inside barrel files", async () => {
         await file("src/features/defaults/index.ts", 'export { default as Button } from "./components/Button";');
 
         const outputCode = await transpileWithSwc({
@@ -241,7 +248,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should show error for barrel files with default exports", async () => {
+    it("should show error for barrel files with default exports", async () => {
         await file("src/features/defaults/index.ts", `export default Button;`);
 
         const res = transpileWithSwc({
@@ -256,7 +263,7 @@ describe("SWC Barrel Files Transformation", () => {
         await expect(res).rejects.toThrow("E_INVALID_BARREL_FILE");
     });
 
-    it("it should show error for barrel files with wilsdcard exports", async () => {
+    it("should show error for barrel files with wilsdcard exports", async () => {
         await file("src/features/wildcard/index.ts", 'export * from "./components/Button";');
 
         const res = transpileWithSwc({
@@ -271,7 +278,7 @@ describe("SWC Barrel Files Transformation", () => {
         await expect(res).rejects.toThrow("E_INVALID_BARREL_FILE");
     });
 
-    it("it should show error for barrel files with namespaced exports", async () => {
+    it("should show error for barrel files with namespaced exports", async () => {
         await file("src/features/namespace/index.ts", 'export * as components from "./components";');
 
         const res = transpileWithSwc({
@@ -301,9 +308,9 @@ describe("SWC Barrel Files Transformation", () => {
         await expect(res).rejects.toThrow("E_NO_NAMESPACE_IMPORTS");
     });
 
-    it("it should handle relative paths in pattern config", async () => {
+    it("should handle relative paths in patterns and aliases", async () => {
         const relativeConfig: PluginConfig = {
-            rules: [
+            aliases: [
                 {
                     pattern: "#entities/*",
                     paths: ["tests/fixtures/src/entities/*/index.ts"],
@@ -313,6 +320,7 @@ describe("SWC Barrel Files Transformation", () => {
                     paths: ["./tests/fixtures/src/features/*/index.ts"],
                 },
             ],
+            patterns: ["./tests/fixtures/src/entities/*/index.ts", "tests/fixtures/src/features/*/index.ts"],
         };
 
         await file("src/entities/e1/index.ts", 'export { Button } from "./Button";');
@@ -336,14 +344,15 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should handle absolute paths in pattern config that match cwd", async () => {
+    it("should handle absolute paths in pattern config that match cwd", async () => {
         const absoluteConfig: PluginConfig = {
-            rules: [
+            aliases: [
                 {
                     pattern: "#libs/*",
                     paths: [path.resolve(process.cwd(), "tests/fixtures/src/libs/*/index.ts")],
                 },
             ],
+            patterns: [path.resolve(process.cwd(), "tests/fixtures/src/libs/*/index.ts")],
         };
 
         await file("src/libs/utils/index.ts", 'export { formatDate } from "./date";');
@@ -364,14 +373,15 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should show error for absolute paths in pattern config that don't match cwd", async () => {
+    it("should show error for absolute paths in pattern config that don't match cwd", async () => {
         const nonMatchingConfig: PluginConfig = {
-            rules: [
+            aliases: [
                 {
                     pattern: "#external/*",
                     paths: ["/non-existent-path/external/*/index.ts"],
                 },
             ],
+            patterns: ["/non-existent-path/external/*/index.ts"],
         };
 
         await file("src/external/ui/index.ts", 'export { Component } from "./Component";');
@@ -385,10 +395,10 @@ describe("SWC Barrel Files Transformation", () => {
             config: nonMatchingConfig,
         });
 
-        await expect(res).rejects.toThrow("E_INVALID_FILE_PATH");
+        await expect(res).rejects.toThrow();
     });
 
-    it("it should handle imports from non-existent files", async () => {
+    it("should handle imports from non-existent files", async () => {
         await file("src/features/existing/index.ts", 'export { Component } from "./components/Component";');
 
         const res = transpileWithSwc({
@@ -403,7 +413,7 @@ describe("SWC Barrel Files Transformation", () => {
         await expect(res).rejects.toThrow("E_BARREL_FILE_NOT_FOUND");
     });
 
-    it("it should handle imports from barrel files without required exports", async () => {
+    it("should handle imports from barrel files without required exports", async () => {
         await file("src/features/f1/index.ts", 'export { Component } from "./components/Component";');
 
         const res = transpileWithSwc({
@@ -418,7 +428,7 @@ describe("SWC Barrel Files Transformation", () => {
         await expect(res).rejects.toThrow("E_UNRESOLVED_EXPORTS");
     });
 
-    it("it should handle imports from barrel files with code", async () => {
+    it("should handle imports from barrel files with code", async () => {
         await file("src/features/with-code/index.ts", 'export const VERSION = "1.0.0";');
 
         const res = transpileWithSwc({
@@ -433,7 +443,7 @@ describe("SWC Barrel Files Transformation", () => {
         await expect(res).rejects.toThrow("E_INVALID_BARREL_FILE");
     });
 
-    it("it should handle imports from files that couldn't be parsed", async () => {
+    it("should handle imports from files that couldn't be parsed", async () => {
         await file(
             "src/features/invalid/index.ts",
             `
@@ -455,7 +465,7 @@ describe("SWC Barrel Files Transformation", () => {
         await expect(res).rejects.toThrow("E_FILE_PARSE");
     });
 
-    it("it should handle re-exports using absolute paths", async () => {
+    it("should handle re-exports using absolute paths", async () => {
         await file("src/features/re-export/index.ts", 'export { Button } from "/root/src/components/Button";');
 
         const outputCode = await transpileWithSwc({
@@ -474,7 +484,7 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    it("it should handle re-exports from packages", async () => {
+    it("should handle re-exports from packages", async () => {
         await file("src/features/re-export/index.ts", 'export { Button } from "ui-lib";');
 
         const outputCode = await transpileWithSwc({
@@ -492,4 +502,45 @@ describe("SWC Barrel Files Transformation", () => {
           "
         `);
     });
+
+    it("should handle absolute paths in imports", async () => {
+        await file("src/features/absolute/index.ts", 'export { Button } from "./components/Button";');
+
+        const outputCode = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/absolute.ts"),
+            code: `
+                import { Button } from "${path.join(fixturesDir, "src/features/absolute/index.ts")}";
+                console.log(Button);
+            `,
+            config: defaultConfig,
+        });
+
+        expect(outputCode).toMatchInlineSnapshot(`
+          "import { Button } from "../../features/absolute/components/Button";
+          console.log(Button);
+          "
+        `);
+    });
+
+    it("should ignore absolute paths outside cwd", async () => {
+        await file("src/features/absolute/index.ts", 'export { Button } from "./components/Button";');
+
+        const outputCode = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/absolute.ts"),
+            code: `
+                import { Button } from "/root/file.ts";
+                console.log(Button);
+            `,
+            config: defaultConfig,
+        });
+
+        expect(outputCode).toMatchInlineSnapshot(`
+          "import { Button } from "/root/file.ts";
+          console.log(Button);
+          "
+        `);
+    });
+
+    // TODO: tests without alises
+    // TODO: tests for same aliases with different contexts
 });

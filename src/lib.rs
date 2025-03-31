@@ -3,12 +3,13 @@
 //! This plugin transforms imports from barrel files (index.ts) into direct imports
 //! from the source files. This helps to avoid circular dependencies and improves tree-shaking.
 
+mod alias_resolver;
 mod cache;
 mod config;
 mod import_transformer;
+mod paths;
 mod pattern_matcher;
 mod re_export;
-mod resolver;
 mod visitor;
 
 use swc_core::ecma::ast::Program;
@@ -39,6 +40,11 @@ pub fn process_transform(program: Program, metadata: TransformPluginProgramMetad
     )
     .expect("E_INVALID_CONFIG: Error parsing barrel plugin configuration");
 
-    let visitor = BarrelTransformVisitor::new(config, cwd, filename);
+    println!("CWD: {}", cwd);
+    println!("Filename: {}", filename);
+
+    let visitor =
+        BarrelTransformVisitor::new(&config, cwd, filename).expect("Error creating visitor");
+
     program.fold_with(&mut as_folder(visitor))
 }

@@ -1,48 +1,11 @@
-//! Resolver module for the barrel files plugin
+//! Path utilities for the barrel files plugin
 //!
-//! This module provides functionality for resolving barrel files.
+//! This module provides functionality for path resolution and manipulation.
 
 use std::path::{Path, PathBuf};
 
-use crate::pattern_matcher::{apply_components_to_template, extract_pattern_components};
-
 /// Virtual filesystem root directory
-const SWC_VIRTUAL_FS_ROOT_DIR: &str = "/cwd";
-
-/// Resolves a barrel file based on the import path and rule
-///
-/// # Arguments
-///
-/// * `cwd` - Compilation working directory
-/// * `import_path` - The import path to resolve
-/// * `pattern` - The pattern to match against
-/// * `paths` - The possible paths to resolve to
-///
-/// # Returns
-///
-/// The resolved path if found, `None` otherwise
-pub fn resolve_barrel_file(
-    cwd: &str,
-    import_path: &str,
-    pattern: &str,
-    paths: &[String],
-) -> Result<Option<String>, String> {
-    let components = extract_pattern_components(import_path, pattern);
-
-    for path_template in paths {
-        let resolved_path = apply_components_to_template(path_template, &components);
-        let path = match resolve_to_virtual_path(cwd, &resolved_path) {
-            Ok(path) => path,
-            Err(err) => return Err(err),
-        };
-
-        if Path::new(&path).exists() {
-            return Ok(Some(path));
-        }
-    }
-
-    Ok(None)
-}
+pub const SWC_VIRTUAL_FS_ROOT_DIR: &str = "/cwd";
 
 /// Resolves a path to a virtual path
 ///
@@ -54,7 +17,7 @@ pub fn resolve_barrel_file(
 /// # Returns
 ///
 /// The resolved virtual path
-pub fn resolve_to_virtual_path(cwd: &str, path: &str) -> Result<String, String> {
+pub fn to_virtual_path(cwd: &str, path: &str) -> Result<String, String> {
     if path.starts_with(cwd) {
         let without_cwd = &path[cwd.len() + 1..];
         let result = path_join(SWC_VIRTUAL_FS_ROOT_DIR, without_cwd);
@@ -206,37 +169,28 @@ mod tests {
         // Test with path starting with cwd
         let cwd = "/home/user/project";
         let path = "/home/user/project/src/main.rs";
-        assert_eq!(
-            resolve_to_virtual_path(cwd, path).unwrap(),
-            "/cwd/src/main.rs"
-        );
+        assert_eq!(to_virtual_path(cwd, path).unwrap(), "/cwd/src/main.rs");
 
         // Test with relative path
         let path = "src/main.rs";
-        assert_eq!(
-            resolve_to_virtual_path(cwd, path).unwrap(),
-            "/cwd/src/main.rs"
-        );
+        assert_eq!(to_virtual_path(cwd, path).unwrap(), "/cwd/src/main.rs");
 
         // Test with relative path starting with ./
         let path = "./src/main.rs";
-        assert_eq!(
-            resolve_to_virtual_path(cwd, path).unwrap(),
-            "/cwd/src/main.rs"
-        );
+        assert_eq!(to_virtual_path(cwd, path).unwrap(), "/cwd/src/main.rs");
 
         // Test with nested ./ in the path
         let path = "tests/./fixtures/src/features/f1/index.ts";
         assert_eq!(
-            resolve_to_virtual_path(cwd, path).unwrap(),
+            to_virtual_path(cwd, path).unwrap(),
             "/cwd/tests/fixtures/src/features/f1/index.ts"
         );
 
         // Test with absolute path not starting with cwd
         let path = "/other/path/file.rs";
-        assert!(resolve_to_virtual_path(cwd, path).is_err());
+        assert!(to_virtual_path(cwd, path).is_err());
         assert_eq!(
-            resolve_to_virtual_path(cwd, path).unwrap_err(),
+            to_virtual_path(cwd, path).unwrap_err(),
             "E_INVALID_FILE_PATH: Absolute paths not starting with cwd are not supported: /other/path/file.rs"
         );
     }

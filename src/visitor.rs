@@ -1,19 +1,22 @@
 use std::collections::HashMap;
+use std::path::Path;
 use swc_core::ecma::ast::{ImportDecl, Module, ModuleItem};
 use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 
+use crate::alias_resolver::AliasResolver;
 use crate::cache::FileCache;
-use crate::config::{Config, Rule};
-use crate::import_transformer::process_import;
-use crate::pattern_matcher::{count_wildcards, path_matches_pattern};
+use crate::config::Config;
+use crate::import_transformer::{parse_barrel_file_exports, transform_import};
+use crate::paths::{dirname, path_join, to_virtual_path};
+use crate::pattern_matcher::path_matches_pattern;
 
 /// Visitor for transforming barrel file imports
 pub struct BarrelTransformVisitor {
     /// Compilation working directory
     cwd: String,
 
-    /// Current file
-    filename: String,
+    /// Virtual path to the directory for the current file
+    source_dir: String,
 
     /// File system cache
     _file_cache: FileCache,
@@ -22,32 +25,81 @@ pub struct BarrelTransformVisitor {
     /// The key is the span of the original import, and the value is a vector of replacement imports
     import_replacements: HashMap<u32, Vec<ImportDecl>>,
 
-    /// Rules sorted by specificity (fewer wildcards first)
-    sorted_rules: Vec<Rule>,
+    /// Resolver for import aliases
+    alias_resolver: AliasResolver,
+
+    /// Patterns for barrel files
+    patterns: Vec<String>,
 }
 
 impl BarrelTransformVisitor {
     /// Creates a new visitor with the specified configuration
-    pub fn new(config: Config, cwd: String, filename: String) -> Self {
+    pub fn new(config: &Config, cwd: String, filename: String) -> Result<Self, String> {
         let cache_duration_ms = config.cache_duration_ms.unwrap_or(1000);
 
-        // Pre-sort rules by specificity (fewer wildcards = more specific)
-        let sorted_rules = match &config.rules {
-            Some(rules) => {
-                let mut sorted = rules.clone();
-                sorted.sort_by_key(|rule| count_wildcards(&rule.pattern));
-                sorted
-            }
-            None => Vec::new(),
-        };
+        // Transform patterns to virtual paths
+        let mut patterns = Vec::new();
+        for pattern in &config.patterns {
+            let joined_path = path_join(&cwd, pattern);
+            let virtual_path = to_virtual_path(&cwd, &joined_path)?;
+            patterns.push(virtual_path);
+        }
 
-        BarrelTransformVisitor {
+        let alias_resolver = AliasResolver::new(config, cwd.clone());
+
+        // Normalize absolute path to the source file
+        // swc/loader and swc/jest pass full `filepath`
+        // swc/cli pass relative `filepath`
+        let source_file_path = path_join(&cwd, &filename);
+        let source_file_virtual_path = to_virtual_path(&cwd, &source_file_path)?;
+        let source_dir = dirname(&source_file_virtual_path);
+
+        println!("source dir: {}", source_dir);
+
+        Ok(BarrelTransformVisitor {
             cwd,
-            filename,
+            source_dir,
             _file_cache: FileCache::new(cache_duration_ms),
             import_replacements: HashMap::new(),
-            sorted_rules,
+            alias_resolver,
+            patterns,
+        })
+    }
+
+    fn process_import(&self, import_decl: &ImportDecl) -> Result<Option<Vec<ImportDecl>>, String> {
+        let import_path = import_decl.src.value.to_string();
+        println!("Processing import: {}", import_path);
+
+        let barrel_file = if import_path.starts_with(".") {
+            path_join(&self.source_dir, &import_path)
+        } else if Path::new(&import_path).is_absolute() {
+            match to_virtual_path(&self.cwd, &import_path) {
+                Ok(resolved_path) => resolved_path,
+                Err(err) => return Ok(None),
+            }
+        } else {
+            match self.alias_resolver.resolve(&import_path)? {
+                Some(resolved_path) => resolved_path,
+                None => {
+                    return Ok(None);
+                }
+            }
+        };
+
+        println!("Resolved barrel file: {}", barrel_file);
+
+        if !self.match_pattern(&barrel_file) {
+            println!("No patterns were matched");
+            return Ok(None);
         }
+
+        println!("Patterns were matched");
+
+        let re_exports = parse_barrel_file_exports(&barrel_file)?;
+        let new_imports =
+            transform_import(&self.source_dir, import_decl, &barrel_file, &re_exports)?;
+
+        Ok(Some(new_imports))
     }
 
     /// Matches an import path against the configured patterns
@@ -59,14 +111,10 @@ impl BarrelTransformVisitor {
     /// # Returns
     ///
     /// The matching rule if found, `None` otherwise
-    fn match_pattern(&self, import_path: &str) -> Option<&Rule> {
-        if self.sorted_rules.is_empty() {
-            return None;
-        }
-
-        self.sorted_rules
+    fn match_pattern(&self, import_path: &str) -> bool {
+        self.patterns
             .iter()
-            .find(|rule| path_matches_pattern(import_path, &rule.pattern))
+            .any(|pattern| path_matches_pattern(import_path, &pattern))
     }
 }
 
@@ -76,46 +124,28 @@ impl VisitMut for BarrelTransformVisitor {
     }
 
     fn visit_mut_import_decl(&mut self, import_decl: &mut ImportDecl) {
-        // todo:
-        // 1. resolve aliases
-        // 2. find barrel file by patterns
-        // 3. replace imports
+        match self.process_import(import_decl) {
+            Ok(Some(new_imports)) => {
+                if !new_imports.is_empty() {
+                    // Store the span of the original import as a key
+                    // We'll use this to identify the import in visit_mut_module_items
+                    let span_lo = import_decl.span.lo.0;
 
-        if self.sorted_rules.is_empty() {
-            return;
-        }
-
-        let import_source = import_decl.src.value.to_string();
-
-        if let Some(rule) = self.match_pattern(&import_source) {
-            match process_import(
-                &self.cwd,
-                &self.filename,
-                import_decl,
-                &rule.pattern,
-                &rule.paths,
-            ) {
-                Ok(new_imports) => {
-                    if !new_imports.is_empty() {
-                        // Store the span of the original import as a key
-                        // We'll use this to identify the import in visit_mut_module_items
-                        let span_lo = import_decl.span.lo.0;
-
-                        self.import_replacements
-                            .insert(span_lo, new_imports.clone());
-                    }
+                    self.import_replacements
+                        .insert(span_lo, new_imports.clone());
                 }
-                Err(e) => {
-                    let handler = &swc_core::plugin::errors::HANDLER;
-                    handler.with(|handler| {
-                        handler
-                            .struct_span_err(
-                                import_decl.span,
-                                &format!("Error processing barrel import: {}", e),
-                            )
-                            .emit()
-                    });
-                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                let handler = &swc_core::plugin::errors::HANDLER;
+                handler.with(|handler| {
+                    handler
+                        .struct_span_err(
+                            import_decl.span,
+                            &format!("Error processing barrel import: {}", err),
+                        )
+                        .emit()
+                });
             }
         }
 
@@ -159,71 +189,5 @@ impl VisitMut for BarrelTransformVisitor {
                 insert_pos += 1;
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_config_parsing() {
-        let config_json = r#"{
-            "rules": [
-                {
-                    "pattern": "@features/*",
-                    "paths": ["src/features/*/index.ts"]
-                }
-            ],
-            "cache_duration_ms": 1000
-        }"#;
-
-        let config: Config =
-            serde_json::from_str(config_json).expect("Failed to parse config JSON");
-
-        assert!(config.rules.is_some());
-        let rules = config.rules.unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].pattern, "@features/*");
-        assert_eq!(rules[0].paths, vec!["src/features/*/index.ts"]);
-        assert_eq!(config.cache_duration_ms, Some(1000));
-    }
-
-    #[test]
-    fn test_match_pattern() {
-        let rule1 = Rule {
-            pattern: "#features/*".to_string(),
-            paths: vec!["src/features/*/index.ts".to_string()],
-        };
-
-        let rule2 = Rule {
-            pattern: "#features/*/testing".to_string(),
-            paths: vec!["src/features/*/testing.ts".to_string()],
-        };
-
-        // Create config with rules in reverse order of specificity
-        // to ensure sorting works
-        let config = Config {
-            rules: Some(vec![rule2.clone(), rule1.clone()]),
-            cache_duration_ms: Some(1000),
-        };
-
-        let visitor = BarrelTransformVisitor::new(config, "/".to_string(), "test.ts".to_string());
-
-        // The more specific rule should be first in sorted_rules
-        assert_eq!(visitor.sorted_rules[0].pattern, "#features/*/testing");
-        assert_eq!(visitor.sorted_rules[1].pattern, "#features/*");
-
-        // Test matching
-        let matched = visitor.match_pattern("#features/some");
-        assert!(matched.is_some());
-        assert_eq!(matched.unwrap().pattern, "#features/*");
-
-        let matched = visitor.match_pattern("#features/some/testing");
-        assert!(matched.is_some());
-        assert_eq!(matched.unwrap().pattern, "#features/*/testing");
-
-        let matched = visitor.match_pattern("#other/some");
-        assert!(matched.is_none());
     }
 }
