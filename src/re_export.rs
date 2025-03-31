@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(re_exports[0].exported_name, "Button");
         assert_eq!(re_exports[0].source_path, "./components/Button");
         assert_eq!(re_exports[0].original_name, "Button");
-        assert_eq!(re_exports[0].is_default, false);
+        assert!(!re_exports[0].is_default);
 
         // Create a barrel file AST with renamed exports
         let mut module = Module {
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(re_exports[0].exported_name, "CustomButton");
         assert_eq!(re_exports[0].source_path, "./components/Button");
         assert_eq!(re_exports[0].original_name, "Button");
-        assert_eq!(re_exports[0].is_default, false);
+        assert!(!re_exports[0].is_default);
 
         // Create a barrel file AST with a default export
         let mut module = Module {
@@ -578,6 +578,6 @@ mod tests {
         assert_eq!(re_exports[0].exported_name, "Button");
         assert_eq!(re_exports[0].source_path, "./components/Button");
         assert_eq!(re_exports[0].original_name, "default");
-        assert_eq!(re_exports[0].is_default, true);
+        assert!(re_exports[0].is_default);
     }
 }
