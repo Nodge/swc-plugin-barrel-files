@@ -1,0 +1,61 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+    rust-checks:
+        name: Rust Checks
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: clippy, rustfmt
+                  targets: wasm32-wasip1
+
+            - name: Cache Rust dependencies
+              uses: Swatinem/rust-cache@v2
+
+            - name: Run Rust Tests
+              run: cargo test --verbose
+
+            - name: Run Clippy
+              run: cargo clippy --all-targets --all-features
+
+    build-and-test:
+        name: Build and Test
+        runs-on: ubuntu-latest
+        needs: rust-checks
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: wasm32-wasip1
+
+            - name: Cache Rust dependencies
+              uses: Swatinem/rust-cache@v2
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: "pnpm"
+
+            - name: Install pnpm
+              uses: pnpm/action-setup@v2
+              with:
+                  version: 9
+                  run_install: false
+
+            - name: Install dependencies
+              run: pnpm install
+
+            - name: Build plugin
+              run: pnpm build
+
+            - name: Run Integration Tests
+              run: pnpm vitest run
