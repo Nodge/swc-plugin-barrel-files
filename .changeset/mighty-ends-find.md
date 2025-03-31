@@ -8,7 +8,7 @@ This update brings compatibility with the latest SWC core version, ensuring the 
 
 Supported tool versions:
 
-- @swc/core: >=1.11.13
+- @swc/core: >=1.11.1
 - rspack: >=1.3.0
 - next: >=v15.2.1
 
