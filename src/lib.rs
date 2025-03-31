@@ -40,9 +40,6 @@ pub fn process_transform(program: Program, metadata: TransformPluginProgramMetad
     )
     .expect("E_INVALID_CONFIG: Error parsing barrel plugin configuration");
 
-    println!("CWD: {}", cwd);
-    println!("Filename: {}", filename);
-
     let visitor =
         BarrelTransformVisitor::new(&config, cwd, filename).expect("Error creating visitor");
 

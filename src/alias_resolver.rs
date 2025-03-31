@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use crate::config::{Alias, Config};
-use crate::paths::to_virtual_path;
+use crate::paths::{path_join, to_virtual_path};
 use crate::pattern_matcher::{
     apply_components_to_template, count_wildcards, extract_pattern_components, path_matches_pattern,
 };
@@ -18,23 +18,41 @@ pub struct AliasResolver {
     cwd: String,
 
     /// Alises sorted by specificity (fewer wildcards first)
-    sorted_alises: Vec<Alias>,
+    aliases: Vec<Alias>,
 }
 
 impl AliasResolver {
     /// Creates a new visitor with the specified configuration
-    pub fn new(config: &Config, cwd: String) -> Self {
-        // Pre-sort rules by specificity (fewer wildcards = more specific)
-        let sorted_alises = match &config.aliases {
-            Some(rules) => {
-                let mut sorted = rules.clone();
-                sorted.sort_by_key(|rule| count_wildcards(&rule.pattern));
-                sorted
-            }
-            None => Vec::new(),
-        };
+    pub fn new(config: &Config, cwd: &str, source_file: &str) -> Result<Self, String> {
+        let mut aliases = Vec::new();
 
-        AliasResolver { cwd, sorted_alises }
+        // Filter aliases by context
+        for alias in config.aliases.as_ref().unwrap_or(&Vec::new()) {
+            match &alias.context {
+                None => {
+                    aliases.push(alias.clone());
+                }
+                Some(context) => {
+                    for ctx in context {
+                        let joined_path = path_join(&cwd, &ctx);
+                        let virtual_path = to_virtual_path(&cwd, &joined_path)?;
+
+                        if source_file.starts_with(&virtual_path) {
+                            aliases.push(alias.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pre-sort rules by specificity (fewer wildcards = more specific)
+        aliases.sort_by_key(|rule| count_wildcards(&rule.pattern));
+
+        Ok(AliasResolver {
+            cwd: cwd.to_string(),
+            aliases,
+        })
     }
 
     /// Resolves an import path using configured aliases
@@ -84,13 +102,11 @@ impl AliasResolver {
     ///
     /// The matching rule if found, `None` otherwise
     fn match_pattern(&self, import_path: &str) -> Option<&Alias> {
-        if self.sorted_alises.is_empty() {
+        if self.aliases.is_empty() {
             return None;
         }
 
-        // todo: respect context
-
-        self.sorted_alises
+        self.aliases
             .iter()
             .find(|alias| path_matches_pattern(import_path, &alias.pattern))
     }
@@ -120,11 +136,13 @@ mod tests {
             cache_duration_ms: Some(1000),
         };
 
-        let visitor = AliasResolver::new(&config, "/".to_string());
+        let cwd = "/".to_string();
+        let source_file = "/some/file".to_string();
+        let visitor = AliasResolver::new(&config, &cwd, &source_file).unwrap();
 
         // The more specific rule should be first in sorted_rules
-        assert_eq!(visitor.sorted_alises[0].pattern, "#features/*/testing");
-        assert_eq!(visitor.sorted_alises[1].pattern, "#features/*");
+        assert_eq!(visitor.aliases[0].pattern, "#features/*/testing");
+        assert_eq!(visitor.aliases[1].pattern, "#features/*");
 
         // Test matching
         let matched = visitor.match_pattern("#features/some");
@@ -137,5 +155,232 @@ mod tests {
 
         let matched = visitor.match_pattern("#other/some");
         assert!(matched.is_none());
+    }
+
+    #[test]
+    fn test_context_filtering() {
+        // Create aliases with different context configurations
+        let no_context_alias = Alias {
+            pattern: "#no-context/*".to_string(),
+            paths: vec!["src/no-context/*/index.ts".to_string()],
+            context: None,
+        };
+
+        let matching_context_alias = Alias {
+            pattern: "#matching-context/*".to_string(),
+            paths: vec!["src/matching-context/*/index.ts".to_string()],
+            context: Some(vec!["/cwd/src".to_string()]),
+        };
+
+        let non_matching_context_alias = Alias {
+            pattern: "#non-matching-context/*".to_string(),
+            paths: vec!["src/non-matching-context/*/index.ts".to_string()],
+            context: Some(vec!["/cwd/other".to_string()]),
+        };
+
+        let multiple_contexts_alias = Alias {
+            pattern: "#multiple-contexts/*".to_string(),
+            paths: vec!["src/multiple-contexts/*/index.ts".to_string()],
+            context: Some(vec!["/cwd/other".to_string(), "/cwd/src".to_string()]),
+        };
+
+        // Create config with all aliases
+        let config = Config {
+            aliases: Some(vec![
+                no_context_alias.clone(),
+                matching_context_alias.clone(),
+                non_matching_context_alias.clone(),
+                multiple_contexts_alias.clone(),
+            ]),
+            patterns: vec![],
+            cache_duration_ms: Some(1000),
+        };
+
+        // Test with source file in /cwd/src
+        let cwd = "/cwd".to_string();
+        let source_file = "/cwd/src/components/Button.tsx".to_string();
+        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+
+        // Verify that aliases with no context or matching context are included
+        assert_eq!(resolver.aliases.len(), 3);
+
+        // Check if the correct aliases were included
+        let patterns: Vec<String> = resolver.aliases.iter().map(|a| a.pattern.clone()).collect();
+        assert!(patterns.contains(&no_context_alias.pattern));
+        assert!(patterns.contains(&matching_context_alias.pattern));
+        assert!(patterns.contains(&multiple_contexts_alias.pattern));
+
+        // Check that non-matching context alias is excluded
+        assert!(!patterns.contains(&non_matching_context_alias.pattern));
+    }
+
+    #[test]
+    fn test_context_filtering_with_different_source_file() {
+        // Create aliases with different context configurations
+        let no_context_alias = Alias {
+            pattern: "#no-context/*".to_string(),
+            paths: vec!["src/no-context/*/index.ts".to_string()],
+            context: None,
+        };
+
+        let matching_context_alias = Alias {
+            pattern: "#matching-context/*".to_string(),
+            paths: vec!["src/matching-context/*/index.ts".to_string()],
+            context: Some(vec!["/cwd/src".to_string()]),
+        };
+
+        let other_context_alias = Alias {
+            pattern: "#other-context/*".to_string(),
+            paths: vec!["src/other-context/*/index.ts".to_string()],
+            context: Some(vec!["/cwd/other".to_string()]),
+        };
+
+        // Create config with all aliases
+        let config = Config {
+            aliases: Some(vec![
+                no_context_alias.clone(),
+                matching_context_alias.clone(),
+                other_context_alias.clone(),
+            ]),
+            patterns: vec![],
+            cache_duration_ms: Some(1000),
+        };
+
+        // Test with source file in /cwd/other
+        let cwd = "/cwd".to_string();
+        let source_file = "/cwd/other/components/Button.tsx".to_string();
+        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+
+        // Verify that aliases with no context or matching context are included
+        assert_eq!(resolver.aliases.len(), 2);
+
+        // Check if the correct aliases were included
+        let patterns: Vec<String> = resolver.aliases.iter().map(|a| a.pattern.clone()).collect();
+        assert!(patterns.contains(&no_context_alias.pattern));
+        assert!(patterns.contains(&other_context_alias.pattern));
+
+        // Check that non-matching context alias is excluded
+        assert!(!patterns.contains(&matching_context_alias.pattern));
+    }
+
+    #[test]
+    fn test_context_filtering_with_no_matching_context() {
+        // Create aliases with different context configurations
+        let no_context_alias = Alias {
+            pattern: "#no-context/*".to_string(),
+            paths: vec!["src/no-context/*/index.ts".to_string()],
+            context: None,
+        };
+
+        let src_context_alias = Alias {
+            pattern: "#src-context/*".to_string(),
+            paths: vec!["src/src-context/*/index.ts".to_string()],
+            context: Some(vec!["/cwd/src".to_string()]),
+        };
+
+        let other_context_alias = Alias {
+            pattern: "#other-context/*".to_string(),
+            paths: vec!["src/other-context/*/index.ts".to_string()],
+            context: Some(vec!["/cwd/other".to_string()]),
+        };
+
+        // Create config with all aliases
+        let config = Config {
+            aliases: Some(vec![
+                no_context_alias.clone(),
+                src_context_alias.clone(),
+                other_context_alias.clone(),
+            ]),
+            patterns: vec![],
+            cache_duration_ms: Some(1000),
+        };
+
+        // Test with source file in /cwd/tests which doesn't match any context
+        let cwd = "/cwd".to_string();
+        let source_file = "/cwd/tests/components/Button.test.tsx".to_string();
+        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+
+        // Verify that only aliases with no context are included
+        assert_eq!(resolver.aliases.len(), 1);
+
+        // Check if the correct aliases were included
+        let patterns: Vec<String> = resolver.aliases.iter().map(|a| a.pattern.clone()).collect();
+        assert!(patterns.contains(&no_context_alias.pattern));
+
+        // Check that context-specific aliases are excluded
+        assert!(!patterns.contains(&src_context_alias.pattern));
+        assert!(!patterns.contains(&other_context_alias.pattern));
+    }
+
+    #[test]
+    fn test_empty_aliases_list() {
+        // Create config with empty aliases list
+        let config = Config {
+            aliases: Some(vec![]),
+            patterns: vec![],
+            cache_duration_ms: Some(1000),
+        };
+
+        let cwd = "/cwd".to_string();
+        let source_file = "/cwd/src/components/Button.tsx".to_string();
+        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+
+        // Verify that the aliases list is empty
+        assert_eq!(resolver.aliases.len(), 0);
+
+        // Test match_pattern with empty aliases
+        let matched = resolver.match_pattern("#features/some");
+        assert!(matched.is_none());
+    }
+
+    #[test]
+    fn test_null_aliases_list() {
+        // Create config with null aliases list
+        let config = Config {
+            aliases: None,
+            patterns: vec![],
+            cache_duration_ms: Some(1000),
+        };
+
+        let cwd = "/cwd".to_string();
+        let source_file = "/cwd/src/components/Button.tsx".to_string();
+        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+
+        // Verify that the aliases list is empty
+        assert_eq!(resolver.aliases.len(), 0);
+
+        // Test match_pattern with empty aliases
+        let matched = resolver.match_pattern("#features/some");
+        assert!(matched.is_none());
+    }
+
+    #[test]
+    fn test_no_duplicate_aliases_with_multiple_matching_contexts() {
+        // Create an alias with multiple matching contexts
+        let alias_with_multiple_contexts = Alias {
+            pattern: "#multi-context/*".to_string(),
+            paths: vec!["src/multi-context/*/index.ts".to_string()],
+            context: Some(vec![
+                "/cwd/src".to_string(),
+                "/cwd/src/components".to_string(),
+                "/cwd/src/features".to_string(),
+            ]),
+        };
+
+        // Create config with the alias
+        let config = Config {
+            aliases: Some(vec![alias_with_multiple_contexts.clone()]),
+            patterns: vec![],
+            cache_duration_ms: Some(1000),
+        };
+
+        // Test with source file that matches multiple contexts
+        let cwd = "/cwd".to_string();
+        let source_file = "/cwd/src/components/Button.tsx".to_string();
+        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+
+        // Verify that the alias is added only once
+        assert_eq!(resolver.aliases.len(), 1);
+        assert_eq!(resolver.aliases[0].pattern, "#multi-context/*");
     }
 }

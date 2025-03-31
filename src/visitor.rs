@@ -45,8 +45,6 @@ impl BarrelTransformVisitor {
             patterns.push(virtual_path);
         }
 
-        let alias_resolver = AliasResolver::new(config, cwd.clone());
-
         // Normalize absolute path to the source file
         // swc/loader and swc/jest pass full `filepath`
         // swc/cli pass relative `filepath`
@@ -54,7 +52,7 @@ impl BarrelTransformVisitor {
         let source_file_virtual_path = to_virtual_path(&cwd, &source_file_path)?;
         let source_dir = dirname(&source_file_virtual_path);
 
-        println!("source dir: {}", source_dir);
+        let alias_resolver = AliasResolver::new(config, &cwd, &source_file_virtual_path)?;
 
         Ok(BarrelTransformVisitor {
             cwd,
@@ -68,14 +66,12 @@ impl BarrelTransformVisitor {
 
     fn process_import(&self, import_decl: &ImportDecl) -> Result<Option<Vec<ImportDecl>>, String> {
         let import_path = import_decl.src.value.to_string();
-        println!("Processing import: {}", import_path);
-
         let barrel_file = if import_path.starts_with(".") {
             path_join(&self.source_dir, &import_path)
         } else if Path::new(&import_path).is_absolute() {
             match to_virtual_path(&self.cwd, &import_path) {
                 Ok(resolved_path) => resolved_path,
-                Err(err) => return Ok(None),
+                Err(_) => return Ok(None),
             }
         } else {
             match self.alias_resolver.resolve(&import_path)? {
@@ -86,14 +82,9 @@ impl BarrelTransformVisitor {
             }
         };
 
-        println!("Resolved barrel file: {}", barrel_file);
-
         if !self.match_pattern(&barrel_file) {
-            println!("No patterns were matched");
             return Ok(None);
         }
-
-        println!("Patterns were matched");
 
         let re_exports = parse_barrel_file_exports(&barrel_file)?;
         let new_imports =

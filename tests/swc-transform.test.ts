@@ -541,6 +541,79 @@ describe("SWC Barrel Files Transformation", () => {
         `);
     });
 
-    // TODO: tests without alises
-    // TODO: tests for same aliases with different contexts
+    it("should use context to resolve aliases", async () => {
+        await file("lib-a/src/features/some/index.ts", 'export { Button } from "./components/Button";');
+        await file("lib-b/src/features/some/index.ts", 'export { select } from "./model/selectors";');
+
+        const config: PluginConfig = {
+            aliases: [
+                {
+                    pattern: "#features/*",
+                    paths: [path.join(fixturesDir, "lib-a/src/features/*/index.ts")],
+                    context: [path.join(fixturesDir, "lib-a")],
+                },
+                {
+                    pattern: "#features/*",
+                    paths: [path.join(fixturesDir, "lib-b/src/features/*/index.ts")],
+                    context: [path.join(fixturesDir, "lib-b")],
+                },
+            ],
+            patterns: [
+                path.join(fixturesDir, "lib-a/src/features/*/index.ts"),
+                path.join(fixturesDir, "lib-b/src/features/*/index.ts"),
+            ],
+        };
+
+        const outputCode = await transpileWithSwc({
+            filename: path.join(fixturesDir, "lib-a/src/pages/test/test1.ts"),
+            code: `
+                import { Button } from "#features/some";
+                console.log(Button);
+            `,
+            config,
+        });
+
+        expect(outputCode).toMatchInlineSnapshot(`
+          "import { Button } from "../../features/some/components/Button";
+          console.log(Button);
+          "
+        `);
+
+        const outputCode2 = await transpileWithSwc({
+            filename: path.join(fixturesDir, "lib-b/src/pages/test/test1.ts"),
+            code: `
+                import { select } from "#features/some";
+                console.log(select);
+            `,
+            config,
+        });
+
+        expect(outputCode2).toMatchInlineSnapshot(`
+          "import { select } from "../../features/some/model/selectors";
+          console.log(select);
+          "
+        `);
+    });
+
+    it("should match barrel files without aliases", async () => {
+        await file("src/features/some/index.ts", 'export { Button } from "./components/Button";');
+
+        const outputCode = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/test1.ts"),
+            code: `
+                import { Button } from "../../features/some/index.ts";
+                console.log(Button);
+            `,
+            config: {
+                aliases: [],
+                patterns: [path.join(fixturesDir, "src/features/*/index.ts")],
+            },
+        });
+
+        expect(outputCode).toMatchInlineSnapshot(`
+          "import { Button } from "../../features/some/components/Button";
+          console.log(Button);
+          "
+        `);
+    });
 });
