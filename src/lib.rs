@@ -12,7 +12,7 @@ mod re_export;
 mod visitor;
 
 use swc_core::ecma::ast::Program;
-use swc_core::ecma::visit::{as_folder, FoldWith};
+use swc_core::ecma::visit::visit_mut_pass;
 use swc_core::plugin::metadata::TransformPluginMetadataContextKind;
 use swc_core::plugin::{plugin_transform, proxies::TransformPluginProgramMetadata};
 
@@ -42,5 +42,5 @@ pub fn process_transform(program: Program, metadata: TransformPluginProgramMetad
     let visitor =
         BarrelTransformVisitor::new(&config, cwd, filename).expect("Error creating visitor");
 
-    program.fold_with(&mut as_folder(visitor))
+    program.apply(visit_mut_pass(visitor))
 }
