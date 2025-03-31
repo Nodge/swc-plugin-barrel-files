@@ -96,7 +96,7 @@ impl BarrelTransformVisitor {
     fn match_pattern(&self, import_path: &str) -> bool {
         self.patterns
             .iter()
-            .any(|pattern| path_matches_pattern(import_path, &pattern))
+            .any(|pattern| path_matches_pattern(import_path, pattern))
     }
 }
 

@@ -32,7 +32,7 @@ pub fn to_virtual_path(cwd: &str, path: &str) -> Result<String, String> {
     }
 
     let result = path_join(SWC_VIRTUAL_FS_ROOT_DIR, path);
-    return Ok(result);
+    Ok(result)
 }
 
 /// Calculates a relative path from one absolute path to another
@@ -53,7 +53,7 @@ pub fn resolve_relative_path(from_path: &str, to_path: &str) -> Option<String> {
         path
     };
 
-    let diff = pathdiff::diff_paths(full_path, &from_path)?;
+    let diff = pathdiff::diff_paths(full_path, from_path)?;
     if diff.starts_with("../") {
         return diff.to_str().map(|s| s.to_string());
     }

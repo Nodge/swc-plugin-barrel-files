@@ -238,9 +238,9 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                                 is_default: true,
                             });
                         } else {
-                            return Err(BarrelError::MissingSource(format!(
-                                "Default export does not have a source"
-                            )));
+                            return Err(BarrelError::MissingSource(
+                                "Default export does not have a source".to_string(),
+                            ));
                         }
                     }
                     ExportSpecifier::Namespace(ns) => {

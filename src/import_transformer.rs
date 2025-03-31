@@ -21,7 +21,7 @@ fn find_re_export_by_name<'a>(re_exports: &'a [ReExport], name: &str) -> Option<
 }
 
 /// Finds a default re-export in the list of re-exports
-fn find_default_re_export<'a>(re_exports: &'a [ReExport]) -> Option<&'a ReExport> {
+fn find_default_re_export(re_exports: &[ReExport]) -> Option<&ReExport> {
     re_exports.iter().find(|e| e.is_default)
 }
 
@@ -58,7 +58,7 @@ fn create_named_specifier(
         local: local_name.clone(),
         imported: if !re_export.is_default {
             // For named exports, check if we need to add the 'as' clause
-            if re_export.original_name != local_name.sym.to_string() {
+            if local_name.sym != re_export.original_name {
                 // Only add the 'as' clause when the original name is different from the local name
                 // This handles both cases:
                 // 1. When the export was renamed in the barrel file (setVisible as toggle)
@@ -86,10 +86,7 @@ fn add_import_specifier(
     import_path: String,
     specifier: ImportSpecifier,
 ) {
-    new_imports
-        .entry(import_path)
-        .or_insert_with(Vec::new)
-        .push(specifier);
+    new_imports.entry(import_path).or_default().push(specifier);
 }
 
 /// Extracts the imported name from a named import specifier
@@ -125,7 +122,7 @@ pub fn transform_import(
 
     let barrel_file_dir = dirname(barrel_file);
 
-    let re_exports = parse_barrel_file_exports(&barrel_file)?;
+    let re_exports = parse_barrel_file_exports(barrel_file)?;
 
     for specifier in &import_decl.specifiers {
         match specifier {

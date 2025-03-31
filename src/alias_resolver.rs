@@ -34,8 +34,8 @@ impl AliasResolver {
                 }
                 Some(context) => {
                     for ctx in context {
-                        let joined_path = path_join(&cwd, &ctx);
-                        let virtual_path = to_virtual_path(&cwd, &joined_path)?;
+                        let joined_path = path_join(cwd, ctx);
+                        let virtual_path = to_virtual_path(cwd, &joined_path)?;
 
                         if source_file.starts_with(&virtual_path) {
                             aliases.push(alias.clone());
