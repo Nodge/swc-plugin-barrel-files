@@ -1,5 +1,13 @@
 # swc-plugin-barrel-files
 
+## 0.1.3
+
+### Patch Changes
+
+- [#10](https://github.com/Nodge/swc-plugin-barrel-files/pull/10) [`7c4df3b`](https://github.com/Nodge/swc-plugin-barrel-files/commit/7c4df3bc489dd49a58737498a6dcba667a0843b6) Thanks [@Nodge](https://github.com/Nodge)! - feat: Add debug logging option
+
+  Introduces a new `debug` option to the plugin configuration. When set to `true`, the plugin will output detailed logs to stdout during the transformation process, aiding in debugging configuration issues and understanding the plugin's behavior.
+
 ## 0.1.2
 
 ### Patch Changes
