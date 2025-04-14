@@ -57,7 +57,7 @@ describe("SWC Barrel Files Transformation", () => {
     };
 
     afterEach(async () => {
-        await fs.rm(fixturesDir, { recursive: true });
+        await fs.rm(fixturesDir, { recursive: true, force: true });
     });
 
     it("should transform index file imports", async () => {
@@ -612,6 +612,26 @@ describe("SWC Barrel Files Transformation", () => {
 
         expect(outputCode).toMatchInlineSnapshot(`
           "import { Button } from "../../features/some/components/Button";
+          console.log(Button);
+          "
+        `);
+    });
+
+    it("should skip files outside cwd", async () => {
+        const outputCode = await transpileWithSwc({
+            filename: "/dev/null",
+            code: `
+                import { Button } from "/dev/null";
+                console.log(Button);
+            `,
+            config: {
+                aliases: [],
+                patterns: [],
+            },
+        });
+
+        expect(outputCode).toMatchInlineSnapshot(`
+          "import { Button } from "/dev/null";
           console.log(Button);
           "
         `);

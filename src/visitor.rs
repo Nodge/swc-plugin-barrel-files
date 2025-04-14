@@ -30,7 +30,7 @@ pub struct BarrelTransformVisitor {
 
 impl BarrelTransformVisitor {
     /// Creates a new visitor with the specified configuration
-    pub fn new(config: &Config, cwd: String, filename: String) -> Result<Self, String> {
+    pub fn new(config: &Config, cwd: String, filename: String) -> Result<Option<Self>, String> {
         // Transform patterns to virtual paths
         let mut patterns = Vec::new();
         for pattern in &config.patterns {
@@ -43,18 +43,24 @@ impl BarrelTransformVisitor {
         // swc/loader and swc/jest pass full `filepath`
         // swc/cli pass relative `filepath`
         let source_file_path = path_join(&cwd, &filename);
+
+        // Cannot process files outside cwd due to WASM restrictions
+        if !source_file_path.starts_with(&cwd) {
+            return Ok(None);
+        }
+
         let source_file_virtual_path = to_virtual_path(&cwd, &source_file_path)?;
         let source_dir = dirname(&source_file_virtual_path);
 
         let alias_resolver = AliasResolver::new(config, &cwd, &source_file_virtual_path)?;
 
-        Ok(BarrelTransformVisitor {
+        Ok(Some(BarrelTransformVisitor {
             cwd,
             source_dir,
             import_replacements: HashMap::new(),
             alias_resolver,
             patterns,
-        })
+        }))
     }
 
     fn process_import(&self, import_decl: &ImportDecl) -> Result<Option<Vec<ImportDecl>>, String> {

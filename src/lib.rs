@@ -42,5 +42,8 @@ pub fn process_transform(program: Program, metadata: TransformPluginProgramMetad
     let visitor =
         BarrelTransformVisitor::new(&config, cwd, filename).expect("Error creating visitor");
 
-    program.fold_with(&mut as_folder(visitor))
+    match visitor {
+        Some(visitor) => program.fold_with(&mut as_folder(visitor)),
+        None => program,
+    }
 }
