@@ -8,6 +8,9 @@ pub struct Config {
 
     /// Rules for resolving import aliases (optional)
     pub aliases: Option<Vec<Alias>>,
+
+    /// Enables debug logging to stdout
+    pub debug: Option<bool>,
 }
 
 /// Rule for resolving import aliases
