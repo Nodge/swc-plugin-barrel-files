@@ -1,5 +1,15 @@
 # swc-plugin-barrel-files
 
+## 0.1.2
+
+### Patch Changes
+
+- [#5](https://github.com/Nodge/swc-plugin-barrel-files/pull/5) [`93b9e12`](https://github.com/Nodge/swc-plugin-barrel-files/commit/93b9e123281f87b13a8ae52edc53e1c6e6b28479) Thanks [@dependabot](https://github.com/apps/dependabot)! - Bump vite from 6.2.2 to 6.2.5
+
+- [#8](https://github.com/Nodge/swc-plugin-barrel-files/pull/8) [`bc83d6a`](https://github.com/Nodge/swc-plugin-barrel-files/commit/bc83d6afc494959c5cd734a88b4222aecd89cabd) Thanks [@Nodge](https://github.com/Nodge)! - fix: Skip files outside cwd
+
+  Skip transformation for files located outside the current working directory (cwd) to prevent errors due to WASM path restrictions. Added a test case to verify this behavior.
+
 ## 0.1.1
 
 ### Patch Changes
