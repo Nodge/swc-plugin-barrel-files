@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use swc_core::ecma::ast::{ImportDecl, Module, ModuleItem};
+use swc_core::ecma::ast::{ImportDecl, ImportSpecifier, Module, ModuleItem};
 use swc_core::ecma::visit::{VisitMut, VisitMutWith};
 
 use crate::alias_resolver::AliasResolver;
@@ -26,6 +26,13 @@ pub struct BarrelTransformVisitor {
 
     /// Patterns for barrel files
     patterns: Vec<String>,
+
+    /// Enable debug logging
+    debug: bool,
+}
+
+fn log(message: String) {
+    println!("[swc-plugin-barrel-files] {}", message);
 }
 
 impl BarrelTransformVisitor {
@@ -46,6 +53,12 @@ impl BarrelTransformVisitor {
 
         // Cannot process files outside cwd due to WASM restrictions
         if !source_file_path.starts_with(&cwd) {
+            if config.debug.unwrap_or_default() {
+                log(format!(
+                    "Skipping {} (reason: outside cwd)",
+                    source_file_path
+                ));
+            }
             return Ok(None);
         }
 
@@ -54,13 +67,18 @@ impl BarrelTransformVisitor {
 
         let alias_resolver = AliasResolver::new(config, &cwd, &source_file_virtual_path)?;
 
-        Ok(Some(BarrelTransformVisitor {
+        let visitor = BarrelTransformVisitor {
             cwd,
             source_dir,
             import_replacements: HashMap::new(),
             alias_resolver,
             patterns,
-        }))
+            debug: config.debug.unwrap_or_default(),
+        };
+
+        visitor.log(format!("Parsing {}", source_file_virtual_path));
+
+        Ok(Some(visitor))
     }
 
     fn process_import(&self, import_decl: &ImportDecl) -> Result<Option<Vec<ImportDecl>>, String> {
@@ -70,22 +88,60 @@ impl BarrelTransformVisitor {
         } else if Path::new(&import_path).is_absolute() {
             match to_virtual_path(&self.cwd, &import_path) {
                 Ok(resolved_path) => resolved_path,
-                Err(_) => return Ok(None),
+                Err(_) => {
+                    self.log(format!(
+                        "    file cannot be processed: {} (reason: outside cwd)",
+                        import_path
+                    ));
+                    return Ok(None);
+                }
             }
         } else {
             match self.alias_resolver.resolve(&import_path)? {
-                Some(resolved_path) => resolved_path,
+                Some(resolved_path) => {
+                    self.log(format!(
+                        "    alias \"{}\" resolved to {}",
+                        import_path, resolved_path
+                    ));
+                    resolved_path
+                }
                 None => {
+                    self.log(format!("    import \"{}\" was not resolved", import_path));
                     return Ok(None);
                 }
             }
         };
 
         if !self.match_pattern(&barrel_file) {
+            self.log(format!("    not matched by patterns: {}", barrel_file));
             return Ok(None);
         }
 
+        self.log(format!("    found barrel file: {}", barrel_file));
+
         let new_imports = transform_import(&self.source_dir, import_decl, &barrel_file)?;
+
+        if self.debug {
+            self.log("    replacing with:".into());
+
+            for new_import in new_imports.iter() {
+                let source = &new_import.src.value;
+                for specifier in &new_import.specifiers {
+                    let specifier_name = match specifier {
+                        ImportSpecifier::Named(named) => &named.local.sym,
+                        ImportSpecifier::Default(default) => &default.local.sym,
+                        ImportSpecifier::Namespace(namespace) => {
+                            // Log namespace using its local name
+                            &namespace.local.sym
+                        }
+                    };
+                    self.log(format!(
+                        "        import {{ {} }} from \"{}\"",
+                        specifier_name, source
+                    ));
+                }
+            }
+        }
 
         Ok(Some(new_imports))
     }
@@ -103,6 +159,12 @@ impl BarrelTransformVisitor {
         self.patterns
             .iter()
             .any(|pattern| path_matches_pattern(import_path, pattern))
+    }
+
+    fn log(&self, message: String) {
+        if self.debug {
+            log(message);
+        }
     }
 }
 

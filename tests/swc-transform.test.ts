@@ -13,6 +13,7 @@ interface PluginConfig {
         paths: string[];
         context?: string[];
     }>;
+    debug?: boolean;
 }
 
 async function transpileWithSwc({ filename, code, config }: { filename: string; code: string; config: PluginConfig }) {
