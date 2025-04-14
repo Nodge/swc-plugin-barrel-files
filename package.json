@@ -1,6 +1,6 @@
 {
     "name": "swc-plugin-barrel-files",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "SWC plugin that transforms imports from barrel files into direct imports from source files",
     "main": "swc_plugin_barrel_files.wasm",
     "types": "types.d.ts",
