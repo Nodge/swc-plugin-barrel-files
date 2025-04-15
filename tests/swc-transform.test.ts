@@ -16,7 +16,14 @@ interface PluginConfig {
     debug?: boolean;
 }
 
-async function transpileWithSwc({ filename, code, config }: { filename: string; code: string; config: PluginConfig }) {
+interface CompilationOptions {
+    filename: string;
+    code: string;
+    config: PluginConfig;
+    cjs?: boolean;
+}
+
+async function transpileWithSwc({ filename, code, config, cjs }: CompilationOptions) {
     const result = await transform(code, {
         filename,
         env: {
@@ -28,6 +35,9 @@ async function transpileWithSwc({ filename, code, config }: { filename: string; 
             experimental: {
                 plugins: [[require.resolve("../swc_plugin_barrel_files.wasm"), config]],
             },
+        },
+        module: {
+            type: cjs ? "commonjs" : "es6",
         },
     });
     return result.code;
@@ -634,6 +644,39 @@ describe("SWC Barrel Files Transformation", () => {
         expect(outputCode).toMatchInlineSnapshot(`
           "import { Button } from "/dev/null";
           console.log(Button);
+          "
+        `);
+    });
+
+    it("should works with commonjs compilation target", async () => {
+        await file(
+            "src/features/some/index.ts",
+            `
+                export { Button } from "./components/Button";
+                export { select } from "./model/selectors";
+            `,
+        );
+
+        const outputCode = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/test1.ts"),
+            code: `
+                import { Button, select, type SomeType } from "#features/some";
+                import type { ButtonProps } from "#features/some";
+
+                console.log(Button, select);
+            `,
+            config: defaultConfig,
+            cjs: true,
+        });
+
+        expect(outputCode).toMatchInlineSnapshot(`
+          ""use strict";
+          Object.defineProperty(exports, "__esModule", {
+              value: true
+          });
+          const _Button = require("../../features/some/components/Button");
+          const _selectors = require("../../features/some/model/selectors");
+          console.log(_Button.Button, _selectors.select);
           "
         `);
     });
