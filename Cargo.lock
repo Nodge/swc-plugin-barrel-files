@@ -1457,7 +1457,6 @@ dependencies = [
  "once_cell",
  "path-absolutize",
  "pathdiff",
- "regex",
  "serde",
  "serde_json",
  "swc_core",

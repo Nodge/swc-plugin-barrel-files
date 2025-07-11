@@ -1,7 +1,6 @@
 //! Re-export analyzer module for the barrel files plugin
 //!
 //! This module provides functionality for analyzing barrel files and extracting re-export information.
-//! It implements the re-export analyzer logic described in the implementation plan.
 
 use std::path::Path;
 use swc_core::ecma::ast::{
@@ -86,85 +85,84 @@ fn validate_barrel_file(ast: &Module) -> Result<(), BarrelError> {
                 match &export_decl.decl {
                     Decl::Var(_) => {
                         return Err(BarrelError::NonExportCode(
-                            "Variable declarations are not allowed in barrel files".to_string(),
+                            "Variable declarations are not allowed in barrel files".into(),
                         ));
                     }
                     Decl::Class(_) => {
                         return Err(BarrelError::NonExportCode(
-                            "Class declarations are not allowed in barrel files".to_string(),
+                            "Class declarations are not allowed in barrel files".into(),
                         ));
                     }
                     Decl::Fn(_) => {
                         return Err(BarrelError::NonExportCode(
-                            "Function declarations are not allowed in barrel files".to_string(),
+                            "Function declarations are not allowed in barrel files".into(),
                         ));
                     }
                     Decl::TsInterface(_) => {
                         return Err(BarrelError::NonExportCode(
-                            "Interface declarations are not allowed in barrel files".to_string(),
+                            "Interface declarations are not allowed in barrel files".into(),
                         ));
                     }
                     Decl::TsTypeAlias(_) => {
                         return Err(BarrelError::NonExportCode(
-                            "Type alias declarations are not allowed in barrel files".to_string(),
+                            "Type alias declarations are not allowed in barrel files".into(),
                         ));
                     }
                     Decl::TsEnum(_) => {
                         return Err(BarrelError::NonExportCode(
-                            "Enum declarations are not allowed in barrel files".to_string(),
+                            "Enum declarations are not allowed in barrel files".into(),
                         ));
                     }
                     Decl::TsModule(_) => {
                         return Err(BarrelError::NonExportCode(
-                            "Module declarations are not allowed in barrel files".to_string(),
+                            "Module declarations are not allowed in barrel files".into(),
                         ));
                     }
                     _ => {
                         return Err(BarrelError::NonExportCode(
-                            "Unknown declaration type in barrel file".to_string(),
+                            "Unknown declaration type in barrel file".into(),
                         ));
                     }
                 }
             }
             ModuleItem::ModuleDecl(ModuleDecl::ExportAll(_)) => {
                 return Err(BarrelError::WildcardExport(
-                    "Wildcard exports are not allowed in barrel files".to_string(),
+                    "Wildcard exports are not allowed in barrel files".into(),
                 ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultDecl(_)) => {
                 return Err(BarrelError::NonExportCode(
-                    "Default export declarations are not allowed in barrel files".to_string(),
+                    "Default export declarations are not allowed in barrel files".into(),
                 ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(_)) => {
                 return Err(BarrelError::NonExportCode(
-                    "Default export expressions are not allowed in barrel files".to_string(),
+                    "Default export expressions are not allowed in barrel files".into(),
                 ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::Import(_)) => {
                 return Err(BarrelError::NonExportCode(
-                    "Import declarations are not allowed in barrel files".to_string(),
+                    "Import declarations are not allowed in barrel files".into(),
                 ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::TsImportEquals(_)) => {
                 return Err(BarrelError::NonExportCode(
-                    "TypeScript import equals declarations are not allowed in barrel files"
-                        .to_string(),
+                    "TypeScript import equals declarations are not allowed in barrel files".into(),
                 ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::TsExportAssignment(_)) => {
                 return Err(BarrelError::NonExportCode(
-                    "TypeScript export assignments are not allowed in barrel files".to_string(),
+                    "TypeScript export assignments are not allowed in barrel files".into(),
                 ));
             }
             ModuleItem::ModuleDecl(ModuleDecl::TsNamespaceExport(_)) => {
                 return Err(BarrelError::NonExportCode(
-                    "TypeScript namespace exports are not allowed in barrel files".to_string(),
+                    "TypeScript namespace exports are not allowed in barrel files".into(),
                 ));
             }
             ModuleItem::Stmt(_) => {
                 return Err(BarrelError::NonExportCode(
-                    "Statements are not allowed in barrel files".to_string(),
+                    "Statements are not allowed in barrel files".into(),
                 ));
             }
         }

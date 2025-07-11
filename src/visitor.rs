@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 use swc_core::ecma::ast::{ImportDecl, ImportSpecifier, Module, ModuleItem};
-use swc_core::ecma::visit::{VisitMut, VisitMutWith};
+use swc_core::ecma::visit::{noop_visit_mut_type, VisitMut, VisitMutWith};
 
 use crate::alias_resolver::AliasResolver;
 use crate::config::Config;
 use crate::import_transformer::transform_import;
 use crate::paths::{dirname, path_join, to_virtual_path};
-use crate::pattern_matcher::path_matches_pattern;
+use crate::pattern_matcher::CompiledPattern;
 
 /// Visitor for transforming barrel file imports
 pub struct BarrelTransformVisitor {
@@ -24,8 +24,8 @@ pub struct BarrelTransformVisitor {
     /// Resolver for import aliases
     alias_resolver: AliasResolver,
 
-    /// Patterns for barrel files
-    patterns: Vec<String>,
+    /// Pre-compiled patterns for barrel files
+    compiled_patterns: Vec<CompiledPattern>,
 
     /// Enable debug logging
     debug: bool,
@@ -38,12 +38,14 @@ fn log(message: String) {
 impl BarrelTransformVisitor {
     /// Creates a new visitor with the specified configuration
     pub fn new(config: &Config, cwd: String, filename: String) -> Result<Option<Self>, String> {
-        // Transform patterns to virtual paths
-        let mut patterns = Vec::new();
+        let mut compiled_patterns = Vec::new();
         for pattern in &config.patterns {
             let joined_path = path_join(&cwd, pattern);
             let virtual_path = to_virtual_path(&cwd, &joined_path)?;
-            patterns.push(virtual_path);
+
+            let compiled_pattern = CompiledPattern::new(&virtual_path)
+                .map_err(|e| format!("Failed to compile pattern '{}': {}", virtual_path, e))?;
+            compiled_patterns.push(compiled_pattern);
         }
 
         // Normalize absolute path to the source file
@@ -72,7 +74,7 @@ impl BarrelTransformVisitor {
             source_dir,
             import_replacements: HashMap::new(),
             alias_resolver,
-            patterns,
+            compiled_patterns,
             debug: config.debug.unwrap_or_default(),
         };
 
@@ -82,31 +84,56 @@ impl BarrelTransformVisitor {
     }
 
     fn process_import(&self, import_decl: &ImportDecl) -> Result<Option<Vec<ImportDecl>>, String> {
-        let import_path = import_decl.src.value.to_string();
+        let import_path = import_decl.src.value.as_str();
+
+        let barrel_file = if !import_path.starts_with('.') && !Path::new(import_path).is_absolute()
+        {
+            self.resolve_aliased_import(import_path)?
+        } else {
+            self.resolve_local_import(import_path)?
+        };
+
+        if let Some(barrel_file) = barrel_file {
+            self.transform_import(import_decl, &barrel_file)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn resolve_aliased_import(&self, import_path: &str) -> Result<Option<String>, String> {
+        match self.alias_resolver.resolve(import_path)? {
+            Some(resolved_path) => {
+                self.log(format!(
+                    "    alias \"{}\" resolved to {}",
+                    import_path, resolved_path
+                ));
+
+                if !self.match_pattern(&resolved_path) {
+                    self.log(format!("    not matched by patterns: {}", resolved_path));
+                    return Ok(None);
+                }
+
+                Ok(Some(resolved_path))
+            }
+            None => {
+                self.log(format!("    import \"{}\" was not resolved", import_path));
+
+                Ok(None)
+            }
+        }
+    }
+
+    fn resolve_local_import(&self, import_path: &str) -> Result<Option<String>, String> {
         let barrel_file = if import_path.starts_with(".") {
-            path_join(&self.source_dir, &import_path)
-        } else if Path::new(&import_path).is_absolute() {
-            match to_virtual_path(&self.cwd, &import_path) {
+            path_join(&self.source_dir, import_path)
+        } else {
+            match to_virtual_path(&self.cwd, import_path) {
                 Ok(resolved_path) => resolved_path,
                 Err(_) => {
                     self.log(format!(
                         "    file cannot be processed: {} (reason: outside cwd)",
                         import_path
                     ));
-                    return Ok(None);
-                }
-            }
-        } else {
-            match self.alias_resolver.resolve(&import_path)? {
-                Some(resolved_path) => {
-                    self.log(format!(
-                        "    alias \"{}\" resolved to {}",
-                        import_path, resolved_path
-                    ));
-                    resolved_path
-                }
-                None => {
-                    self.log(format!("    import \"{}\" was not resolved", import_path));
                     return Ok(None);
                 }
             }
@@ -117,9 +144,17 @@ impl BarrelTransformVisitor {
             return Ok(None);
         }
 
+        Ok(Some(barrel_file))
+    }
+
+    fn transform_import(
+        &self,
+        import_decl: &ImportDecl,
+        barrel_file: &str,
+    ) -> Result<Option<Vec<ImportDecl>>, String> {
         self.log(format!("    found barrel file: {}", barrel_file));
 
-        let new_imports = transform_import(&self.source_dir, import_decl, &barrel_file)?;
+        let new_imports = transform_import(&self.source_dir, import_decl, barrel_file)?;
 
         if self.debug {
             self.log("    replacing with:".into());
@@ -130,10 +165,7 @@ impl BarrelTransformVisitor {
                     let specifier_name = match specifier {
                         ImportSpecifier::Named(named) => &named.local.sym,
                         ImportSpecifier::Default(default) => &default.local.sym,
-                        ImportSpecifier::Namespace(namespace) => {
-                            // Log namespace using its local name
-                            &namespace.local.sym
-                        }
+                        ImportSpecifier::Namespace(namespace) => &namespace.local.sym,
                     };
                     self.log(format!(
                         "        import {{ {} }} from \"{}\"",
@@ -146,7 +178,7 @@ impl BarrelTransformVisitor {
         Ok(Some(new_imports))
     }
 
-    /// Matches an import path against the configured patterns
+    /// Matches an import path against the configured patterns using pre-compiled patterns
     ///
     /// # Arguments
     ///
@@ -154,11 +186,11 @@ impl BarrelTransformVisitor {
     ///
     /// # Returns
     ///
-    /// The matching rule if found, `None` otherwise
+    /// `true` if any pattern matches, `false` otherwise
     fn match_pattern(&self, import_path: &str) -> bool {
-        self.patterns
+        self.compiled_patterns
             .iter()
-            .any(|pattern| path_matches_pattern(import_path, pattern))
+            .any(|compiled_pattern| compiled_pattern.matches(import_path))
     }
 
     fn log(&self, message: String) {
@@ -169,6 +201,10 @@ impl BarrelTransformVisitor {
 }
 
 impl VisitMut for BarrelTransformVisitor {
+    // A comprehensive list of possible visitor methods can be found here:
+    // https://rustdoc.swc.rs/swc_ecma_visit/trait.VisitMut.html
+    noop_visit_mut_type!();
+
     fn visit_mut_module(&mut self, module: &mut Module) {
         module.visit_mut_children_with(self);
     }
@@ -181,8 +217,7 @@ impl VisitMut for BarrelTransformVisitor {
                     // We'll use this to identify the import in visit_mut_module_items
                     let span_lo = import_decl.span.lo.0;
 
-                    self.import_replacements
-                        .insert(span_lo, new_imports.clone());
+                    self.import_replacements.insert(span_lo, new_imports);
                 }
             }
             Ok(None) => {}
@@ -213,30 +248,36 @@ impl VisitMut for BarrelTransformVisitor {
 
         for (i, item) in items.iter().enumerate() {
             if let ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import)) = item {
-                if let Some(mut replacements) =
-                    self.import_replacements.get(&import.span.lo.0).cloned()
-                {
-                    replacements
-                        .sort_by(|a, b| a.src.value.to_string().cmp(&b.src.value.to_string()));
-                    changes.push((i, replacements));
+                if self.import_replacements.contains_key(&import.span.lo.0) {
+                    changes.push(i);
                 }
             }
         }
 
         // Apply all changes, starting from the end to avoid invalidating indices
-        for (index, replacements) in changes.into_iter().rev() {
-            // Remove the original import
-            items.remove(index);
+        for index in changes.into_iter().rev() {
+            if let Some(ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import))) =
+                items.get(index)
+            {
+                if let Some(replacements) = self.import_replacements.remove(&import.span.lo.0) {
+                    // Remove the original import
+                    items.remove(index);
 
-            // Insert all replacements at the position of the removed import
-            let mut insert_pos = index;
+                    // Sort replacements for deterministic output
+                    let mut sorted_replacements = replacements;
+                    sorted_replacements
+                        .sort_by(|a, b| a.src.value.to_string().cmp(&b.src.value.to_string()));
 
-            for import in replacements.iter() {
-                items.insert(
-                    insert_pos,
-                    ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import.clone())),
-                );
-                insert_pos += 1;
+                    // Insert all replacements at the position of the removed import
+                    let mut insert_pos = index;
+                    for import in sorted_replacements.into_iter() {
+                        items.insert(
+                            insert_pos,
+                            ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import)),
+                        );
+                        insert_pos += 1;
+                    }
+                }
             }
         }
     }

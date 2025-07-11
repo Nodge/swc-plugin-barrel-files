@@ -1,7 +1,9 @@
 use crate::paths::{dirname, path_join, resolve_relative_path};
 use crate::re_export::{analyze_barrel_file, ReExport};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 use swc_core::common::sync::Lrc;
 use swc_core::common::DUMMY_SP;
 use swc_core::common::{
@@ -14,6 +16,10 @@ use swc_core::ecma::ast::{
     Str,
 };
 use swc_core::ecma::parser::{parse_file_as_module, Syntax, TsConfig};
+
+/// Cache for parsed barrel files to avoid re-parsing the same file
+static BARREL_CACHE: Lazy<Mutex<HashMap<String, Vec<ReExport>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Finds a re-export by name in the list of re-exports
 fn find_re_export_by_name<'a>(re_exports: &'a [ReExport], name: &str) -> Option<&'a ReExport> {
@@ -232,6 +238,12 @@ fn parse_file(file_path: &str) -> Result<Module, String> {
 ///
 /// A list of re-exports if the file is a valid barrel file, `Err` otherwise
 fn parse_barrel_file_exports(file_path: &str) -> Result<Vec<ReExport>, String> {
+    if let Ok(cache) = BARREL_CACHE.lock() {
+        if let Some(cached_exports) = cache.get(file_path) {
+            return Ok(cached_exports.clone());
+        }
+    }
+
     let ast = parse_file(file_path)?;
 
     match analyze_barrel_file(&ast, file_path) {
@@ -242,6 +254,11 @@ fn parse_barrel_file_exports(file_path: &str) -> Result<Vec<ReExport>, String> {
                     file_path
                 ));
             }
+
+            if let Ok(mut cache) = BARREL_CACHE.lock() {
+                cache.insert(file_path.to_string(), re_exports.clone());
+            }
+
             Ok(re_exports)
         }
         Err(e) => Err(format!(
