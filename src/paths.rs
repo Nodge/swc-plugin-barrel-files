@@ -2,10 +2,44 @@
 //!
 //! This module provides functionality for path resolution and manipulation.
 
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// Virtual filesystem root directory
 pub const SWC_VIRTUAL_FS_ROOT_DIR: &str = "/cwd";
+
+/// Cache for file existence checks
+static FILE_EXISTS_CACHE: Lazy<Mutex<HashMap<String, bool>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Fast file existence check with caching
+///
+/// # Arguments
+///
+/// * `path` - The file path to check
+///
+/// # Returns
+///
+/// `true` if the file exists, `false` otherwise
+pub fn file_exists(path: &str) -> bool {
+    // Check cache first
+    if let Ok(cache) = FILE_EXISTS_CACHE.lock() {
+        if let Some(&exists) = cache.get(path) {
+            return exists;
+        }
+    }
+
+    let exists = Path::new(path).exists();
+
+    // Cache the result
+    if let Ok(mut cache) = FILE_EXISTS_CACHE.lock() {
+        cache.insert(path.to_string(), exists);
+    }
+
+    exists
+}
 
 /// Resolves a path to a virtual path
 ///
@@ -75,10 +109,22 @@ pub fn resolve_relative_path(from_path: &str, to_path: &str) -> Option<String> {
 /// A normalized joined path string
 pub fn path_join(path: &str, path2: &str) -> String {
     let joined_path = Path::new(path).join(path2);
+    normalize_path(&joined_path)
+}
 
+/// Normalizes a path by resolving . and .. components
+///
+/// # Arguments
+///
+/// * `path` - The path to normalize
+///
+/// # Returns
+///
+/// The normalized path string
+pub fn normalize_path(path: &Path) -> String {
     let mut components = Vec::new();
 
-    for component in joined_path.components() {
+    for component in path.components() {
         match component {
             std::path::Component::ParentDir => {
                 // Remove the last component if it exists (to handle ..)
@@ -95,13 +141,11 @@ pub fn path_join(path: &str, path2: &str) -> String {
                 // Skip . components as they don't change the path
             }
             _ => {
-                // Add normal components
                 components.push(component);
             }
         }
     }
 
-    // Reconstruct the path from normalized components
     let normalized_path =
         components
             .iter()
@@ -110,7 +154,6 @@ pub fn path_join(path: &str, path2: &str) -> String {
                 path
             });
 
-    // Convert to string
     normalized_path.to_string_lossy().to_string()
 }
 
@@ -211,6 +254,29 @@ mod tests {
 
         // Test with single file (no directory)
         assert_eq!(dirname("file.txt"), "");
+    }
+
+    #[test]
+    fn test_normalize_path() {
+        use std::path::Path;
+
+        // Basic normalization
+        assert_eq!(normalize_path(Path::new("a/b/c")), "a/b/c");
+        assert_eq!(normalize_path(Path::new("a/./b")), "a/b");
+        assert_eq!(normalize_path(Path::new("a/b/../c")), "a/c");
+        assert_eq!(normalize_path(Path::new("a/../b")), "b");
+
+        // Multiple components
+        assert_eq!(normalize_path(Path::new("a/b/../../c")), "c");
+        assert_eq!(normalize_path(Path::new("./a/b")), "a/b");
+
+        // Absolute paths
+        assert_eq!(normalize_path(Path::new("/a/b/../c")), "/a/c");
+        assert_eq!(normalize_path(Path::new("/a/./b")), "/a/b");
+
+        // Edge cases
+        assert_eq!(normalize_path(Path::new(".")), "");
+        assert_eq!(normalize_path(Path::new("a/..")), "");
     }
 
     #[test]

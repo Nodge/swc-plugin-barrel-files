@@ -2,88 +2,163 @@
 //!
 //! This module provides functionality for matching import paths against patterns with wildcards,
 //! extracting components from matched paths, and applying those components to path templates.
-//! It implements the pattern matching logic described in the implementation plan.
 
-use regex::Regex;
 use std::collections::HashMap;
 
-/// Matches an import path against a pattern with wildcards
-///
-/// # Arguments
-///
-/// * `path` - The import path to match
-/// * `pattern` - The pattern to match against, which may contain wildcards (`*`)
-///
-/// # Returns
-///
-/// `true` if the pattern matches the path, `false` otherwise
-pub fn path_matches_pattern(path: &str, pattern: &str) -> bool {
-    // Convert pattern to regex
-    let regex_pattern = pattern
-        .replace("*", "([^/]+)")
-        .replace(".", "\\.")
-        .replace("/", "\\/");
-
-    let regex = Regex::new(&format!("^{}$", regex_pattern)).unwrap_or_else(|e| {
-        panic!("Invalid regex pattern generated from '{}': {}", pattern, e);
-    });
-
-    regex.is_match(path)
+/// Pre-compiled pattern for optimized matching
+#[derive(Clone)]
+pub struct CompiledPattern {
+    /// Pattern parts separated by wildcards
+    pub parts: Vec<String>,
+    /// Number of wildcards in the pattern
+    pub wildcard_count: usize,
 }
 
-/// Counts the number of wildcards in a pattern
-///
-/// # Arguments
-///
-/// * `pattern` - The pattern to count wildcards in
-///
-/// # Returns
-///
-/// The number of wildcards (`*`) in the pattern
-pub fn count_wildcards(pattern: &str) -> usize {
-    pattern.matches('*').count()
-}
+impl CompiledPattern {
+    /// Creates a new compiled pattern
+    pub fn new(pattern: &str) -> Result<Self, String> {
+        let parts: Vec<String> = pattern.split('*').map(|s| s.to_string()).collect();
+        let wildcard_count = parts.len().saturating_sub(1);
 
-///
-/// # Arguments
-///
-/// * `path` - The import path to extract components from
-/// * `pattern` - The pattern with wildcards to match against
-///
-/// # Returns
-///
-/// A HashMap containing the extracted components, where the keys are the wildcard
-/// positions (p0, p1, etc.) and the values are the matched strings
-pub fn extract_pattern_components(path: &str, pattern: &str) -> HashMap<String, String> {
-    let mut components = HashMap::new();
-
-    // Convert pattern to regex with named capture groups
-    let mut regex_pattern = String::new();
-    let mut i = 0;
-
-    for part in pattern.split('*') {
-        regex_pattern.push_str(&regex::escape(part));
-
-        if i < pattern.split('*').count() - 1 {
-            regex_pattern.push_str(&format!("(?P<p{}>([^/]+))", i));
-            i += 1;
-        }
+        Ok(CompiledPattern {
+            parts,
+            wildcard_count,
+        })
     }
 
-    let regex = Regex::new(&format!("^{}$", regex_pattern)).unwrap_or_else(|e| {
-        panic!("Invalid regex pattern generated from '{}': {}", pattern, e);
-    });
+    /// Checks if a path matches this pattern
+    pub fn matches(&self, path: &str) -> bool {
+        if self.parts.is_empty() {
+            return path.is_empty();
+        }
 
-    if let Some(captures) = regex.captures(path) {
-        for i in 0..i {
-            let name = format!("p{}", i);
-            if let Some(capture) = captures.name(&name) {
-                components.insert(name, capture.as_str().to_string());
+        if self.wildcard_count == 0 {
+            return path == self.parts[0];
+        }
+
+        // Each wildcard (*) matches [^/]+ (one or more characters except /)
+        let mut path_pos = 0;
+        let path_len = path.len();
+
+        for (i, part) in self.parts.iter().enumerate() {
+            if i == 0 {
+                // First part - must match at the beginning
+                if !part.is_empty() {
+                    if path_pos + part.len() > path_len
+                        || &path[path_pos..path_pos + part.len()] != part
+                    {
+                        return false;
+                    }
+                    path_pos += part.len();
+                }
+            } else if i == self.parts.len() - 1 {
+                // Last part - must match at the end
+                if !part.is_empty() {
+                    if path_len < part.len() || &path[path_len - part.len()..] != part {
+                        return false;
+                    }
+                    // Make sure there's a valid wildcard match before this part
+                    let wildcard_start = path_pos;
+                    let wildcard_end = path_len - part.len();
+                    if wildcard_start >= wildcard_end {
+                        return false;
+                    }
+                    // Check that the wildcard doesn't contain '/'
+                    let wildcard_value = &path[wildcard_start..wildcard_end];
+                    if wildcard_value.contains('/') {
+                        return false;
+                    }
+                } else {
+                    // Pattern ends with wildcard, check remaining path doesn't contain '/'
+                    if path_pos >= path_len {
+                        return false;
+                    }
+                    let wildcard_value = &path[path_pos..];
+                    if wildcard_value.contains('/') {
+                        return false;
+                    }
+                }
+            } else {
+                // Middle parts - find the next occurrence, but ensure wildcard is valid
+                if !part.is_empty() {
+                    if let Some(pos) = path[path_pos..].find(part) {
+                        // Check that the wildcard before this part doesn't contain '/'
+                        let wildcard_value = &path[path_pos..path_pos + pos];
+                        if wildcard_value.contains('/') || wildcard_value.is_empty() {
+                            return false;
+                        }
+                        path_pos += pos + part.len();
+                    } else {
+                        return false;
+                    }
+                }
             }
         }
+
+        true
     }
 
-    components
+    /// Extracts components from a path using this pattern
+    pub fn extract_components(&self, path: &str) -> HashMap<String, String> {
+        let mut components = HashMap::new();
+
+        if !self.matches(path) {
+            return components;
+        }
+
+        if self.wildcard_count == 0 {
+            return components;
+        }
+
+        let mut path_pos = 0;
+        let path_len = path.len();
+        let mut wildcard_index = 0;
+
+        for (i, part) in self.parts.iter().enumerate() {
+            if i == 0 {
+                // Skip the first literal part
+                if !part.is_empty() {
+                    path_pos += part.len();
+                }
+            } else if i == self.parts.len() - 1 {
+                // Extract the last wildcard before the final literal part
+                if !part.is_empty() {
+                    let end_pos = path_len - part.len();
+                    if path_pos < end_pos {
+                        let wildcard_value = &path[path_pos..end_pos];
+                        components
+                            .insert(format!("p{}", wildcard_index), wildcard_value.to_string());
+                    }
+                } else {
+                    // Pattern ends with wildcard
+                    if path_pos < path_len {
+                        let wildcard_value = &path[path_pos..];
+                        components
+                            .insert(format!("p{}", wildcard_index), wildcard_value.to_string());
+                    }
+                }
+                break;
+            } else {
+                // Extract wildcard between parts
+                if !part.is_empty() {
+                    if let Some(next_pos) = path[path_pos..].find(part) {
+                        let wildcard_value = &path[path_pos..path_pos + next_pos];
+                        components
+                            .insert(format!("p{}", wildcard_index), wildcard_value.to_string());
+                        wildcard_index += 1;
+                        path_pos += next_pos + part.len();
+                    } else {
+                        break;
+                    }
+                } else {
+                    // Empty part, increment wildcard index
+                    wildcard_index += 1;
+                }
+            }
+        }
+
+        components
+    }
 }
 
 /// Applies extracted components to a path template
@@ -118,96 +193,97 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_path_matches_pattern() {
+    fn test_compiled_pattern_direct() {
+        // Test CompiledPattern directly
+        let pattern = CompiledPattern::new("#entities/*").unwrap();
+        assert_eq!(pattern.wildcard_count, 1);
+        assert_eq!(pattern.parts, vec!["#entities/", ""]);
+        assert!(pattern.matches("#entities/user"));
+        assert!(!pattern.matches("#entities/user/model"));
+
+        let pattern2 = CompiledPattern::new("#features/*/components/*").unwrap();
+        assert_eq!(pattern2.wildcard_count, 2);
+        assert_eq!(pattern2.parts, vec!["#features/", "/components/", ""]);
+        assert!(pattern2.matches("#features/auth/components/login"));
+        assert!(!pattern2.matches("#features/auth/pages/login"));
+
+        // Test component extraction
+        let components = pattern2.extract_components("#features/auth/components/login");
+        assert_eq!(components.get("p0"), Some(&"auth".to_string()));
+        assert_eq!(components.get("p1"), Some(&"login".to_string()));
+    }
+
+    #[test]
+    fn test_pattern_matching() {
         // Basic pattern matching
-        assert!(path_matches_pattern("#entities/user", "#entities/*"));
-        assert!(path_matches_pattern(
-            "#entities/user/testing",
-            "#entities/*/testing"
-        ));
-        assert!(!path_matches_pattern("#entities/user/model", "#entities/*"));
-        assert!(!path_matches_pattern("#entities/", "#entities/*"));
-        assert!(path_matches_pattern(
-            "@direct-frontend/stdlib",
-            "@direct-frontend/stdlib"
-        ));
-        assert!(!path_matches_pattern(
-            "@direct-frontend/stdlib/testing",
-            "@direct-frontend/stdlib"
-        ));
+        let pattern1 = CompiledPattern::new("#entities/*").unwrap();
+        assert!(pattern1.matches("#entities/user"));
+        assert!(!pattern1.matches("#entities/user/model"));
+        assert!(!pattern1.matches("#entities/"));
+
+        let pattern2 = CompiledPattern::new("#entities/*/testing").unwrap();
+        assert!(pattern2.matches("#entities/user/testing"));
+        assert!(!pattern2.matches("#entities/user/model/testing"));
+
+        let pattern3 = CompiledPattern::new("@direct-frontend/stdlib").unwrap();
+        assert!(pattern3.matches("@direct-frontend/stdlib"));
+        assert!(!pattern3.matches("@direct-frontend/stdlib/testing"));
 
         // Multiple wildcards
-        assert!(path_matches_pattern(
-            "#features/auth/components/login",
-            "#features/*/components/*"
-        ));
-        assert!(!path_matches_pattern(
-            "#features/auth/pages/login",
-            "#features/*/components/*"
-        ));
-
-        // Wildcard in the middle
-        assert!(path_matches_pattern(
-            "#entities/user/testing",
-            "#entities/*/testing"
-        ));
-        assert!(!path_matches_pattern(
-            "#entities/user/model/testing",
-            "#entities/*/testing"
-        ));
+        let pattern4 = CompiledPattern::new("#features/*/components/*").unwrap();
+        assert!(pattern4.matches("#features/auth/components/login"));
+        assert!(!pattern4.matches("#features/auth/pages/login"));
 
         // Special characters in patterns
-        assert!(path_matches_pattern(
-            "@direct-frontend/components/Button",
-            "@direct-frontend/components/*"
-        ));
-        assert!(path_matches_pattern(
-            "@direct-frontend/components.ui/Button",
-            "@direct-frontend/components.ui/*"
-        ));
-        assert!(!path_matches_pattern(
-            "@direct-frontend/components|ui/Button",
-            "@direct-frontend/components.ui/*"
-        ));
+        let pattern5 = CompiledPattern::new("@direct-frontend/components/*").unwrap();
+        assert!(pattern5.matches("@direct-frontend/components/Button"));
+
+        let pattern6 = CompiledPattern::new("@direct-frontend/components.ui/*").unwrap();
+        assert!(pattern6.matches("@direct-frontend/components.ui/Button"));
+        assert!(!pattern6.matches("@direct-frontend/components|ui/Button"));
     }
 
     #[test]
-    fn test_count_wildcards() {
-        assert_eq!(count_wildcards("#entities/*"), 1);
-        assert_eq!(count_wildcards("#entities/*/testing"), 1);
-        assert_eq!(count_wildcards("#features/*/components/*"), 2);
-        assert_eq!(count_wildcards("@direct-frontend/stdlib"), 0);
+    fn test_wildcard_counting() {
+        let pattern1 = CompiledPattern::new("#entities/*").unwrap();
+        assert_eq!(pattern1.wildcard_count, 1);
+
+        let pattern2 = CompiledPattern::new("#entities/*/testing").unwrap();
+        assert_eq!(pattern2.wildcard_count, 1);
+
+        let pattern3 = CompiledPattern::new("#features/*/components/*").unwrap();
+        assert_eq!(pattern3.wildcard_count, 2);
+
+        let pattern4 = CompiledPattern::new("@direct-frontend/stdlib").unwrap();
+        assert_eq!(pattern4.wildcard_count, 0);
     }
 
     #[test]
-    fn test_extract_pattern_components() {
+    fn test_component_extraction() {
         // Single wildcard
-        let components = extract_pattern_components("#entities/user", "#entities/*");
+        let pattern1 = CompiledPattern::new("#entities/*").unwrap();
+        let components = pattern1.extract_components("#entities/user");
         assert_eq!(components.get("p0"), Some(&"user".to_string()));
 
         // Wildcard in the middle
-        let components =
-            extract_pattern_components("#entities/user/testing", "#entities/*/testing");
+        let pattern2 = CompiledPattern::new("#entities/*/testing").unwrap();
+        let components = pattern2.extract_components("#entities/user/testing");
         assert_eq!(components.get("p0"), Some(&"user".to_string()));
 
         // Multiple wildcards
-        let components = extract_pattern_components(
-            "#features/auth/components/login",
-            "#features/*/components/*",
-        );
+        let pattern3 = CompiledPattern::new("#features/*/components/*").unwrap();
+        let components = pattern3.extract_components("#features/auth/components/login");
         assert_eq!(components.get("p0"), Some(&"auth".to_string()));
         assert_eq!(components.get("p1"), Some(&"login".to_string()));
 
         // No wildcards
-        let components =
-            extract_pattern_components("@direct-frontend/stdlib", "@direct-frontend/stdlib");
+        let pattern4 = CompiledPattern::new("@direct-frontend/stdlib").unwrap();
+        let components = pattern4.extract_components("@direct-frontend/stdlib");
         assert!(components.is_empty());
 
         // Special characters
-        let components = extract_pattern_components(
-            "@direct-frontend/components.ui/Button",
-            "@direct-frontend/components.ui/*",
-        );
+        let pattern5 = CompiledPattern::new("@direct-frontend/components.ui/*").unwrap();
+        let components = pattern5.extract_components("@direct-frontend/components.ui/Button");
         assert_eq!(components.get("p0"), Some(&"Button".to_string()));
     }
 

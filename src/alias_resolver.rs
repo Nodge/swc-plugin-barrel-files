@@ -4,54 +4,65 @@
 //! and finding corresponding barrel files. It handles pattern matching and path resolution
 //! to support dynamic imports and re-exports in the barrel files system.
 
-use std::path::Path;
-
 use crate::config::{Alias, Config};
-use crate::paths::{path_join, to_virtual_path};
-use crate::pattern_matcher::{
-    apply_components_to_template, count_wildcards, extract_pattern_components, path_matches_pattern,
-};
+use crate::paths::{file_exists, path_join, to_virtual_path};
+use crate::pattern_matcher::{apply_components_to_template, CompiledPattern};
+
+/// Pre-compiled path alias
+#[derive(Clone)]
+struct CompiledAlias {
+    /// Original alias configuration
+    alias: Alias,
+    /// Pre-compiled pattern for matching
+    compiled_pattern: CompiledPattern,
+}
 
 /// Resolver for import aliases
 pub struct AliasResolver {
     /// Compilation working directory
     cwd: String,
 
-    /// Alises sorted by specificity (fewer wildcards first)
-    aliases: Vec<Alias>,
+    /// Pre-compiled aliases sorted by specificity (fewer wildcards first)
+    compiled_aliases: Vec<CompiledAlias>,
 }
 
 impl AliasResolver {
     /// Creates a new visitor with the specified configuration
     pub fn new(config: &Config, cwd: &str, source_file: &str) -> Result<Self, String> {
-        let mut aliases = Vec::new();
+        let mut compiled_aliases = Vec::new();
 
-        // Filter aliases by context
+        // Filter aliases by context and patterns
         for alias in config.aliases.as_ref().unwrap_or(&Vec::new()) {
-            match &alias.context {
-                None => {
-                    aliases.push(alias.clone());
-                }
-                Some(context) => {
-                    for ctx in context {
-                        let joined_path = path_join(cwd, ctx);
-                        let virtual_path = to_virtual_path(cwd, &joined_path)?;
-
-                        if source_file.starts_with(&virtual_path) {
-                            aliases.push(alias.clone());
-                            break;
-                        }
+            let should_include = match &alias.context {
+                None => true,
+                Some(context) => context.iter().any(|ctx| {
+                    let joined_path = path_join(cwd, ctx);
+                    if let Ok(virtual_path) = to_virtual_path(cwd, &joined_path) {
+                        return source_file.starts_with(&virtual_path);
                     }
-                }
+                    false
+                }),
+            };
+
+            if should_include {
+                let compiled_pattern = CompiledPattern::new(&alias.pattern).map_err(|e| {
+                    format!("Failed to compile alias pattern '{}': {}", alias.pattern, e)
+                })?;
+
+                compiled_aliases.push(CompiledAlias {
+                    alias: alias.clone(),
+                    compiled_pattern,
+                });
             }
         }
 
-        // Pre-sort rules by specificity (fewer wildcards = more specific)
-        aliases.sort_by_key(|rule| count_wildcards(&rule.pattern));
+        // Pre-sort aliases by specificity (fewer wildcards = more specific)
+        compiled_aliases
+            .sort_by_key(|compiled_alias| compiled_alias.compiled_pattern.wildcard_count);
 
         Ok(AliasResolver {
-            cwd: cwd.to_string(),
-            aliases,
+            cwd: cwd.to_owned(),
+            compiled_aliases,
         })
     }
 
@@ -71,14 +82,16 @@ impl AliasResolver {
     /// * `Ok(None)` - If no matching alias was found or no matching file exists
     /// * `Err(String)` - If there was an error during resolution
     pub fn resolve(&self, import_path: &str) -> Result<Option<String>, String> {
-        if let Some(alias) = self.match_pattern(import_path) {
-            let components = extract_pattern_components(import_path, &alias.pattern);
+        if let Some(compiled_alias) = self.match_pattern(import_path) {
+            let components = compiled_alias
+                .compiled_pattern
+                .extract_components(import_path);
 
-            for path_template in alias.paths.iter() {
+            for path_template in compiled_alias.alias.paths.iter() {
                 let resolved_path = apply_components_to_template(path_template, &components);
                 let path = to_virtual_path(&self.cwd, &resolved_path)?;
 
-                if Path::new(&path).exists() {
+                if file_exists(&path) {
                     return Ok(Some(path));
                 }
             }
@@ -92,7 +105,7 @@ impl AliasResolver {
         Ok(None)
     }
 
-    /// Matches an import path against the configured patterns
+    /// Matches an import path against the configured patterns using pre-compiled patterns
     ///
     /// # Arguments
     ///
@@ -100,15 +113,15 @@ impl AliasResolver {
     ///
     /// # Returns
     ///
-    /// The matching rule if found, `None` otherwise
-    fn match_pattern(&self, import_path: &str) -> Option<&Alias> {
-        if self.aliases.is_empty() {
+    /// The matching compiled alias if found, `None` otherwise
+    fn match_pattern(&self, import_path: &str) -> Option<&CompiledAlias> {
+        if self.compiled_aliases.is_empty() {
             return None;
         }
 
-        self.aliases
+        self.compiled_aliases
             .iter()
-            .find(|alias| path_matches_pattern(import_path, &alias.pattern))
+            .find(|compiled_alias| compiled_alias.compiled_pattern.matches(import_path))
     }
 }
 
@@ -141,17 +154,20 @@ mod tests {
         let visitor = AliasResolver::new(&config, &cwd, &source_file).unwrap();
 
         // The more specific rule should be first in sorted_rules
-        assert_eq!(visitor.aliases[0].pattern, "#features/*/testing");
-        assert_eq!(visitor.aliases[1].pattern, "#features/*");
+        assert_eq!(
+            visitor.compiled_aliases[0].alias.pattern,
+            "#features/*/testing"
+        );
+        assert_eq!(visitor.compiled_aliases[1].alias.pattern, "#features/*");
 
         // Test matching
         let matched = visitor.match_pattern("#features/some");
         assert!(matched.is_some());
-        assert_eq!(matched.unwrap().pattern, "#features/*");
+        assert_eq!(matched.unwrap().alias.pattern, "#features/*");
 
         let matched = visitor.match_pattern("#features/some/testing");
         assert!(matched.is_some());
-        assert_eq!(matched.unwrap().pattern, "#features/*/testing");
+        assert_eq!(matched.unwrap().alias.pattern, "#features/*/testing");
 
         let matched = visitor.match_pattern("#other/some");
         assert!(matched.is_none());
@@ -202,10 +218,14 @@ mod tests {
         let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
 
         // Verify that aliases with no context or matching context are included
-        assert_eq!(resolver.aliases.len(), 3);
+        assert_eq!(resolver.compiled_aliases.len(), 3);
 
         // Check if the correct aliases were included
-        let patterns: Vec<String> = resolver.aliases.iter().map(|a| a.pattern.clone()).collect();
+        let patterns: Vec<String> = resolver
+            .compiled_aliases
+            .iter()
+            .map(|a| a.alias.pattern.clone())
+            .collect();
         assert!(patterns.contains(&no_context_alias.pattern));
         assert!(patterns.contains(&matching_context_alias.pattern));
         assert!(patterns.contains(&multiple_contexts_alias.pattern));
@@ -252,10 +272,14 @@ mod tests {
         let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
 
         // Verify that aliases with no context or matching context are included
-        assert_eq!(resolver.aliases.len(), 2);
+        assert_eq!(resolver.compiled_aliases.len(), 2);
 
         // Check if the correct aliases were included
-        let patterns: Vec<String> = resolver.aliases.iter().map(|a| a.pattern.clone()).collect();
+        let patterns: Vec<String> = resolver
+            .compiled_aliases
+            .iter()
+            .map(|a| a.alias.pattern.clone())
+            .collect();
         assert!(patterns.contains(&no_context_alias.pattern));
         assert!(patterns.contains(&other_context_alias.pattern));
 
@@ -301,10 +325,14 @@ mod tests {
         let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
 
         // Verify that only aliases with no context are included
-        assert_eq!(resolver.aliases.len(), 1);
+        assert_eq!(resolver.compiled_aliases.len(), 1);
 
         // Check if the correct aliases were included
-        let patterns: Vec<String> = resolver.aliases.iter().map(|a| a.pattern.clone()).collect();
+        let patterns: Vec<String> = resolver
+            .compiled_aliases
+            .iter()
+            .map(|a| a.alias.pattern.clone())
+            .collect();
         assert!(patterns.contains(&no_context_alias.pattern));
 
         // Check that context-specific aliases are excluded
@@ -326,7 +354,7 @@ mod tests {
         let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
 
         // Verify that the aliases list is empty
-        assert_eq!(resolver.aliases.len(), 0);
+        assert_eq!(resolver.compiled_aliases.len(), 0);
 
         // Test match_pattern with empty aliases
         let matched = resolver.match_pattern("#features/some");
@@ -347,7 +375,7 @@ mod tests {
         let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
 
         // Verify that the aliases list is empty
-        assert_eq!(resolver.aliases.len(), 0);
+        assert_eq!(resolver.compiled_aliases.len(), 0);
 
         // Test match_pattern with empty aliases
         let matched = resolver.match_pattern("#features/some");
@@ -380,7 +408,10 @@ mod tests {
         let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
 
         // Verify that the alias is added only once
-        assert_eq!(resolver.aliases.len(), 1);
-        assert_eq!(resolver.aliases[0].pattern, "#multi-context/*");
+        assert_eq!(resolver.compiled_aliases.len(), 1);
+        assert_eq!(
+            resolver.compiled_aliases[0].alias.pattern,
+            "#multi-context/*"
+        );
     }
 }
