@@ -50,9 +50,10 @@ pnpm add --save-dev swc-plugin-barrel-files
 
 ## Compatibility
 
-| Plugin Versions | Runtime Version Ranges                                          |
-| --------------- | --------------------------------------------------------------- |
-| >= 0.1.0        | [Compatibility table](https://plugins.swc.rs/versions/range/10) |
+| Plugin Versions | Runtime Version Ranges                                           |
+| --------------- | ---------------------------------------------------------------- |
+| >=0.1.0 <0.3.0  | [Compatibility table](https://plugins.swc.rs/versions/range/10)  |
+| >=0.3.0         | [Compatibility table](https://plugins.swc.rs/versions/range/364) |
 
 ## Configuration
 
