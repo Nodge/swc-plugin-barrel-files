@@ -1,11 +1,25 @@
 # swc-plugin-barrel-files
 
+## 0.3.0
+
+### Minor Changes
+
+- [#4](https://github.com/Nodge/swc-plugin-barrel-files/pull/4) [`2283987`](https://github.com/Nodge/swc-plugin-barrel-files/commit/22839874e4830c8b52e7cfe99d76e1b8af76ada9) Thanks [@Nodge](https://github.com/Nodge)! - Update swc_core to 31.1.0
+
+  This update brings compatibility with the latest SWC core version, ensuring the plugin works with newer versions of SWC-based tools. The update maintains all existing functionality while adapting to the SWC core API changes.
+
+  Supported tool versions:
+  - @swc/core: >=1.12.0
+  - rspack: >=1.4.0
+  - next: >=v15.5.0
+
+  For detailed compatibility information with the new core, refer to: https://plugins.swc.rs/versions/range/364
+
 ## 0.2.0
 
 ### Minor Changes
 
 - [#13](https://github.com/Nodge/swc-plugin-barrel-files/pull/13) [`97c946e`](https://github.com/Nodge/swc-plugin-barrel-files/commit/97c946ee38325ef9104bf6a8d4a6eddd8f241b49) Thanks [@Nodge](https://github.com/Nodge)! - Performance optimizations for pattern matching and caching
-
   - Replace regex-based pattern matching with custom implementation for faster matching
   - Add caching for barrel file parsing to avoid re-parsing same files
   - Add caching for file existence checks to reduce filesystem calls
