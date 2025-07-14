@@ -15,7 +15,7 @@ use swc_core::ecma::ast::{
     ImportDecl, ImportDefaultSpecifier, ImportNamedSpecifier, ImportSpecifier, ModuleExportName,
     Str,
 };
-use swc_core::ecma::parser::{parse_file_as_module, Syntax, TsConfig};
+use swc_core::ecma::parser::{parse_file_as_module, Syntax};
 
 /// Cache for parsed barrel files to avoid re-parsing the same file
 static BARREL_CACHE: Lazy<Mutex<HashMap<String, Vec<ReExport>>>> =
@@ -73,6 +73,7 @@ fn create_named_specifier(
                     span: DUMMY_SP,
                     sym: re_export.original_name.clone().into(),
                     optional: false,
+                    ctxt: Default::default(),
                 }))
             } else {
                 // If the original name is the same as the local name, don't add the 'as' clause
@@ -196,6 +197,7 @@ pub fn transform_import(
             }),
             type_only: import_decl.type_only,
             with: import_decl.with.clone(),
+            phase: Default::default(),
         };
 
         result.push(new_import);
@@ -214,13 +216,7 @@ fn parse_file(file_path: &str) -> Result<Module, String> {
         Err(e) => return Err(format!("E_FILE_READ: Failed to load file: {}", e)),
     };
 
-    let syntax = Syntax::Typescript(TsConfig {
-        tsx: false,
-        decorators: false,
-        dts: false,
-        no_early_errors: false,
-        disallow_ambiguous_jsx_like: false,
-    });
+    let syntax = Syntax::Typescript(Default::default());
 
     match parse_file_as_module(&fm, syntax, Default::default(), None, &mut vec![]) {
         Ok(module) => Ok(module),
