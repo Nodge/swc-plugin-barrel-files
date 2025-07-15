@@ -202,6 +202,47 @@ You can limit aliases to specific directories using the `context` option. This a
 }
 ```
 
+### Error Handling Configuration
+
+The plugin provides configurable error handling for unsupported import patterns and invalid barrel files:
+
+```json
+{
+    "jsc": {
+        "experimental": {
+            "plugins": [
+                [
+                    "swc-plugin-barrel-files",
+                    {
+                        "patterns": ["src/modules/*/index.ts"],
+                        "unsupported_import_mode": "warn",
+                        "invalid_barrel_mode": "error"
+                    }
+                ]
+            ]
+        }
+    }
+}
+```
+
+#### `unsupported_import_mode`
+
+Controls how the plugin handles unsupported import patterns like namespace imports (`import * as x from 'y'`).
+
+- **`"error"`** (default): Throws an error and stops compilation
+- **`"warn"`**: Prints a warning and skips the import (leaves it unchanged)
+- **`"off"`**: Silently skips the import (leaves it unchanged)
+
+#### `invalid_barrel_mode`
+
+Controls how the plugin handles invalid barrel files (files that contain unsupported constructs like wildcard exports, variable declarations, etc.).
+
+- **`"error"`** (default): Throws an error and stops compilation
+- **`"warn"`**: Prints a warning and skips the import (leaves it unchanged)
+- **`"off"`**: Silently skips the import (leaves it unchanged)
+
+These options allow you to gradually adopt the plugin by treating errors as warnings during development.
+
 ## Limitations
 
 ### ESM Syntax Only
@@ -406,6 +447,7 @@ The plugin may throw the following specific error codes:
 **Solution**:
 
 - Convert namespace imports to named imports
+- Set `unsupported_import_mode` to `"warn"` or `"off"` to handle these imports gracefully
 - See the [Limitations](#limitations) section for details on supported syntax
 
 #### E_UNRESOLVED_EXPORTS
@@ -455,6 +497,7 @@ The plugin may throw the following specific error codes:
 - Ensure the barrel file only contains re-export statements
 - Remove any non-export code from the barrel file
 - Convert wildcard exports to named exports
+- Set `invalid_barrel_mode` to `"warn"` or `"off"` to handle these files gracefully
 
 #### E_INVALID_FILE_PATH
 

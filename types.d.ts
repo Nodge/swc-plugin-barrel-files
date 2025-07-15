@@ -28,4 +28,19 @@ export interface PluginConfig {
      * An optional array of alias configurations.
      */
     aliases?: AliasConfig[];
+    /**
+     * Enables debug logging to stdout.
+     * @default false
+     */
+    debug?: boolean;
+    /**
+     * How to handle unsupported import patterns (e.g. namespace imports).
+     * @default "error"
+     */
+    unsupported_import_mode?: "error" | "warn" | "off";
+    /**
+     * How to handle invalid barrel files (files with unsupported constructs).
+     * @default "error"
+     */
+    invalid_barrel_mode?: "error" | "warn" | "off";
 }

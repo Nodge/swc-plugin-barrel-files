@@ -147,6 +147,8 @@ mod tests {
             aliases: Some(vec![rule2.clone(), rule1.clone()]),
             patterns: vec![],
             debug: None,
+            unsupported_import_mode: Default::default(),
+            invalid_barrel_mode: Default::default(),
         };
 
         let cwd = "/".to_string();
@@ -210,6 +212,8 @@ mod tests {
             ]),
             patterns: vec![],
             debug: None,
+            unsupported_import_mode: Default::default(),
+            invalid_barrel_mode: Default::default(),
         };
 
         // Test with source file in /cwd/src
@@ -264,6 +268,8 @@ mod tests {
             ]),
             patterns: vec![],
             debug: None,
+            unsupported_import_mode: Default::default(),
+            invalid_barrel_mode: Default::default(),
         };
 
         // Test with source file in /cwd/other
@@ -317,6 +323,8 @@ mod tests {
             ]),
             patterns: vec![],
             debug: None,
+            unsupported_import_mode: Default::default(),
+            invalid_barrel_mode: Default::default(),
         };
 
         // Test with source file in /cwd/tests which doesn't match any context
@@ -347,6 +355,8 @@ mod tests {
             aliases: Some(vec![]),
             patterns: vec![],
             debug: None,
+            unsupported_import_mode: Default::default(),
+            invalid_barrel_mode: Default::default(),
         };
 
         let cwd = "/cwd".to_string();
@@ -368,6 +378,8 @@ mod tests {
             aliases: None,
             patterns: vec![],
             debug: None,
+            unsupported_import_mode: Default::default(),
+            invalid_barrel_mode: Default::default(),
         };
 
         let cwd = "/cwd".to_string();
@@ -400,6 +412,8 @@ mod tests {
             aliases: Some(vec![alias_with_multiple_contexts.clone()]),
             patterns: vec![],
             debug: None,
+            unsupported_import_mode: Default::default(),
+            invalid_barrel_mode: Default::default(),
         };
 
         // Test with source file that matches multiple contexts
