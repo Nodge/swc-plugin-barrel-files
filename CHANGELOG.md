@@ -1,5 +1,37 @@
 # swc-plugin-barrel-files
 
+## 0.4.0
+
+### Minor Changes
+
+- [#16](https://github.com/Nodge/swc-plugin-barrel-files/pull/16) [`5af9272`](https://github.com/Nodge/swc-plugin-barrel-files/commit/5af92722f5d65d2f67243945e5d173c68ce31e11) Thanks [@Nodge](https://github.com/Nodge)! - Add configuration options for handling unsupported import patterns and invalid barrel files.
+
+  ## New Configuration Options
+
+  ### `unsupported_import_mode`
+
+  Controls how the plugin handles unsupported import patterns (e.g., namespace imports like `import * as foo from 'bar'`):
+  - `"error"` (default): Throws an error and stops compilation
+  - `"warn"`: Prints a warning to stderr and skips the import transformation
+  - `"off"`: Silently skips the import transformation
+
+  ### `invalid_barrel_mode`
+
+  Controls how the plugin handles invalid barrel files (files with unsupported constructs like wildcard exports, default exports, etc):
+  - `"error"` (default): Throws an error and stops compilation
+  - `"warn"`: Prints a warning to stderr and skips the barrel file processing
+  - `"off"`: Silently skips the barrel file processing
+
+  ## Examples
+
+  ```json
+  {
+    "patterns": ["src/features/*/index.ts"],
+    "unsupported_import_mode": "warn",
+    "invalid_barrel_mode": "off"
+  }
+  ```
+
 ## 0.3.0
 
 ### Minor Changes
