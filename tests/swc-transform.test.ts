@@ -1,7 +1,8 @@
 import process from "node:process";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { describe, it, expect, afterEach } from "vitest";
+import { spawn } from "node:child_process";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { transform } from "@swc/core";
 
 const fixturesDir = path.resolve(__dirname, "fixtures");
@@ -14,6 +15,8 @@ interface PluginConfig {
         context?: string[];
     }>;
     debug?: boolean;
+    unsupported_import_mode?: "error" | "warn" | "off";
+    invalid_barrel_mode?: "error" | "warn" | "off";
 }
 
 interface CompilationOptions {
@@ -23,7 +26,24 @@ interface CompilationOptions {
     cjs?: boolean;
 }
 
-async function transpileWithSwc({ filename, code, config, cjs }: CompilationOptions) {
+interface TransformResult {
+    code: string;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+}
+
+async function transpileWithSwc({ filename, code, config, cjs }: CompilationOptions): Promise<TransformResult> {
+    return new Promise((resolve, reject) => {
+        const scriptContent = `
+const { transform } = require("@swc/core");
+
+const config = ${JSON.stringify(config)};
+const filename = ${JSON.stringify(filename)};
+const cjs = ${JSON.stringify(cjs)};
+const code = ${JSON.stringify(code)};
+
+async function run() {
     const result = await transform(code, {
         filename,
         env: {
@@ -33,14 +53,81 @@ async function transpileWithSwc({ filename, code, config, cjs }: CompilationOpti
         },
         jsc: {
             experimental: {
-                plugins: [[require.resolve("../swc_plugin_barrel_files.wasm"), config]],
+                plugins: [[require.resolve("./swc_plugin_barrel_files.wasm"), config]],
             },
         },
         module: {
             type: cjs ? "commonjs" : "es6",
         },
     });
-    return result.code;
+
+    console.log("__SWC_RESULT_START__");
+    console.log(JSON.stringify(result.code));
+    console.log("__SWC_RESULT_END__");
+}
+
+run().catch(error => {
+    console.error(error.message);
+    process.exit(1);
+});
+        `;
+
+        const child = spawn("node", ["-e", scriptContent], {
+            stdio: ["pipe", "pipe", "pipe"],
+            cwd: process.cwd(),
+        });
+
+        let stdout = "";
+        let stderr = "";
+        let transformResult = "";
+
+        child.stdout.on("data", (data) => {
+            const output = data.toString();
+            stdout += output;
+
+            const resultMatch = stdout.match(/__SWC_RESULT_START__\n(.*?)\n__SWC_RESULT_END__/s);
+            if (resultMatch) {
+                try {
+                    transformResult = JSON.parse(resultMatch[1]);
+                } catch (e) {
+                    transformResult = resultMatch[1];
+                }
+            }
+        });
+
+        child.stderr.on("data", (data) => {
+            stderr += data.toString();
+        });
+
+        child.on("close", (code) => {
+            if (code !== 0) {
+                resolve({
+                    exitCode: code ?? 0,
+                    code: transformResult,
+                    stdout: cleanupOutput(stdout.replace(/__SWC_RESULT_START__.*?__SWC_RESULT_END__/s, "")),
+                    stderr: cleanupOutput(stderr),
+                });
+            } else {
+                resolve({
+                    exitCode: code ?? 0,
+                    code: transformResult,
+                    stdout: cleanupOutput(stdout.replace(/__SWC_RESULT_START__.*?__SWC_RESULT_END__/s, "")),
+                    stderr: cleanupOutput(stderr),
+                });
+            }
+        });
+
+        child.on("error", (error) => {
+            reject(error);
+        });
+    });
+}
+
+function cleanupOutput(output: string) {
+    return output
+        .replaceAll(process.cwd(), "/cwd")
+        .replace(/(\s)column: \d+/, "$1column: ?")
+        .trim();
 }
 
 async function file(filename: string, content: string) {
@@ -80,7 +167,7 @@ describe("SWC Barrel Files Transformation", () => {
             `,
         );
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/test1.ts"),
             code: `
                 import { Button, select, type SomeType } from "#features/some";
@@ -91,18 +178,20 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "../../features/some/components/Button";
           import { select } from "../../features/some/model/selectors";
           console.log(Button, select);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should transform testing file imports", async () => {
         await file("src/features/some/testing.ts", 'export { mock } from "./api/mocks/test";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/test2.ts"),
             code: `
                 import { mock, type Mock } from "#features/some/testing";
@@ -112,11 +201,13 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { mock } from "../../features/some/api/mocks/test";
           console.log(mock);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should transform barrel files with comments", async () => {
@@ -131,7 +222,7 @@ describe("SWC Barrel Files Transformation", () => {
             `,
         );
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/comments.ts"),
             code: `
                 import { Component, reducer } from "#features/comments";
@@ -140,12 +231,14 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Component } from "../../features/comments/components/Component";
           import { reducer } from "../../features/comments/model/reducer";
           console.log(Component, reducer);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should find barrel file from an array of paths", async () => {
@@ -161,7 +254,7 @@ describe("SWC Barrel Files Transformation", () => {
 
         await file("src/ui/button/index.tsx", 'export { Button } from "./Button";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/jsx.ts"),
             code: `
                 import { Button } from "#ui/button";
@@ -170,17 +263,19 @@ describe("SWC Barrel Files Transformation", () => {
             config: jsxConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "../../ui/button/Button";
           console.log(Button);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should transform imports with renamed import", async () => {
         await file("src/features/renamed/index.ts", 'export { Modal } from "./components/Modal";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/renamed.ts"),
             code: `
                 import { Modal as CustomModal } from "#features/renamed";
@@ -189,11 +284,13 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Modal as CustomModal } from "../../features/renamed/components/Modal";
           console.log(CustomModal);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should transform barrel file with renamed export", async () => {
@@ -202,7 +299,7 @@ describe("SWC Barrel Files Transformation", () => {
             'export { setVisible as toggle } from "./model/visibility";',
         );
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/renamed-exports.ts"),
             code: `
                 import { toggle } from "#features/renamed-exports";
@@ -211,11 +308,13 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { setVisible as toggle } from "../../features/renamed-exports/model/visibility";
           console.log(toggle);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should transform barrel file with renamed import and export", async () => {
@@ -224,7 +323,7 @@ describe("SWC Barrel Files Transformation", () => {
             'export { setVisible as toggle } from "./model/visibility";',
         );
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/renamed-exports.ts"),
             code: `
                 import { toggle as switcher } from "#features/renamed-exports";
@@ -233,17 +332,19 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { setVisible as switcher } from "../../features/renamed-exports/model/visibility";
           console.log(switcher);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should transform default re-exports inside barrel files", async () => {
         await file("src/features/defaults/index.ts", 'export { default as Button } from "./components/Button";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/defaults.ts"),
             code: `
                 import { Button } from "#features/defaults";
@@ -252,17 +353,19 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import Button from "../../features/defaults/components/Button";
           console.log(Button);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should show error for barrel files with default exports", async () => {
         await file("src/features/defaults/index.ts", `export default Button;`);
 
-        const res = transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/defaults.ts"),
             code: `
                 import Button from "#features/defaults";
@@ -271,13 +374,24 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        await expect(res).rejects.toThrow("E_INVALID_BARREL_FILE");
+        expect(result.code).toMatchInlineSnapshot(`""`);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`
+          "x Error processing barrel import: E_INVALID_BARREL_FILE: Invalid barrel file /cwd/tests/fixtures/src/features/defaults/index.ts: Barrel file contains non-export code: Default export expressions are not allowed in barrel files
+             ,-[/cwd/tests/fixtures/src/pages/test/defaults.ts:2:1]
+           1 | 
+           2 |                 import Button from "#features/defaults";
+             :                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           3 |                 console.log(Button);
+           4 |             
+             \`----"
+        `);
     });
 
     it("should show error for barrel files with wilsdcard exports", async () => {
         await file("src/features/wildcard/index.ts", 'export * from "./components/Button";');
 
-        const res = transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/star-export.ts"),
             code: `
                 import { Button } from "#features/wildcard";
@@ -286,13 +400,24 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        await expect(res).rejects.toThrow("E_INVALID_BARREL_FILE");
+        expect(result.code).toMatchInlineSnapshot(`""`);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`
+          "x Error processing barrel import: E_INVALID_BARREL_FILE: Invalid barrel file /cwd/tests/fixtures/src/features/wildcard/index.ts: Wildcard exports are not supported in barrel files: Wildcard exports are not allowed in barrel files
+             ,-[/cwd/tests/fixtures/src/pages/test/star-export.ts:2:1]
+           1 | 
+           2 |                 import { Button } from "#features/wildcard";
+             :                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           3 |                 console.log(Button);
+           4 |             
+             \`----"
+        `);
     });
 
     it("should show error for barrel files with namespaced exports", async () => {
         await file("src/features/namespace/index.ts", 'export * as components from "./components";');
 
-        const res = transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/namespace.ts"),
             code: `
                 import { components } from "#features/namespace";
@@ -301,13 +426,24 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        await expect(res).rejects.toThrow("E_INVALID_BARREL_FILE");
+        expect(result.code).toMatchInlineSnapshot(`""`);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`
+          "x Error processing barrel import: E_INVALID_BARREL_FILE: Invalid barrel file /cwd/tests/fixtures/src/features/namespace/index.ts: Namespace exports are not supported in barrel files: export * as components from './components'
+             ,-[/cwd/tests/fixtures/src/pages/test/namespace.ts:2:1]
+           1 | 
+           2 |                 import { components } from "#features/namespace";
+             :                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           3 |                 console.log(components);
+           4 |             
+             \`----"
+        `);
     });
 
     it("should show error for namespaced imports from barrel file", async () => {
         await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
 
-        const res = transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/namespace.ts"),
             code: `
                 import * as f1 from "#features/f1";
@@ -316,7 +452,18 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        await expect(res).rejects.toThrow("E_NO_NAMESPACE_IMPORTS");
+        expect(result.code).toMatchInlineSnapshot(`""`);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`
+          "x Error processing barrel import: E_NO_NAMESPACE_IMPORTS: Namespace imports are not supported for barrel file optimization
+             ,-[/cwd/tests/fixtures/src/pages/test/namespace.ts:2:1]
+           1 | 
+           2 |                 import * as f1 from "#features/f1";
+             :                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           3 |                 console.log(f1);
+           4 |             
+             \`----"
+        `);
     });
 
     it("should handle relative paths in patterns and aliases", async () => {
@@ -337,7 +484,7 @@ describe("SWC Barrel Files Transformation", () => {
         await file("src/entities/e1/index.ts", 'export { Button } from "./Button";');
         await file("src/features/f1/index.ts", 'export { toggle } from "./model";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/page.ts"),
             code: `
                 import { Button } from "#entities/e1";
@@ -347,12 +494,14 @@ describe("SWC Barrel Files Transformation", () => {
             config: relativeConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "../../entities/e1/Button";
           import { toggle } from "../../features/f1/model";
           console.log(Button, toggle);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should handle absolute paths in pattern config that match cwd", async () => {
@@ -368,7 +517,7 @@ describe("SWC Barrel Files Transformation", () => {
 
         await file("src/libs/utils/index.ts", 'export { formatDate } from "./date";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/absolute.ts"),
             code: `
                 import { formatDate } from "#libs/utils";
@@ -377,11 +526,13 @@ describe("SWC Barrel Files Transformation", () => {
             config: absoluteConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { formatDate } from "../../libs/utils/date";
           console.log(formatDate);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should show error for absolute paths in pattern config that don't match cwd", async () => {
@@ -397,7 +548,7 @@ describe("SWC Barrel Files Transformation", () => {
 
         await file("src/external/ui/index.ts", 'export { Component } from "./Component";');
 
-        const res = transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/non-matching.ts"),
             code: `
                 import { Component } from "#external/ui";
@@ -406,13 +557,22 @@ describe("SWC Barrel Files Transformation", () => {
             config: nonMatchingConfig,
         });
 
-        await expect(res).rejects.toThrow();
+        expect(result.code).toMatchInlineSnapshot(`""`);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`
+          "thread '<unnamed>' panicked at src/lib.rs:43:61:
+          Error creating visitor: "E_INVALID_FILE_PATH: Absolute paths not starting with cwd are not supported: /non-existent-path/external/*/index.ts"
+          note: run with \`RUST_BACKTRACE=1\` environment variable to display a backtrace
+          plugin
+
+            x failed to invoke plugin on 'Some("/cwd/tests/fixtures/src/pages/test/non-matching.ts")'"
+        `);
     });
 
     it("should handle imports from non-existent files", async () => {
         await file("src/features/existing/index.ts", 'export { Component } from "./components/Component";');
 
-        const res = transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/non-existent.ts"),
             code: `
                 import { Component } from "#features/non-existent";
@@ -421,13 +581,24 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        await expect(res).rejects.toThrow("E_BARREL_FILE_NOT_FOUND");
+        expect(result.code).toMatchInlineSnapshot(`""`);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`
+          "x Error processing barrel import: E_BARREL_FILE_NOT_FOUND: Could not resolve barrel file for import alias #features/non-existent
+             ,-[/cwd/tests/fixtures/src/pages/test/non-existent.ts:2:1]
+           1 | 
+           2 |                 import { Component } from "#features/non-existent";
+             :                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           3 |                 console.log(Component);
+           4 |             
+             \`----"
+        `);
     });
 
     it("should handle imports from barrel files without required exports", async () => {
         await file("src/features/f1/index.ts", 'export { Component } from "./components/Component";');
 
-        const res = transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/page.ts"),
             code: `
                 import { Action } from "#features/f1";
@@ -436,13 +607,24 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        await expect(res).rejects.toThrow("E_UNRESOLVED_EXPORTS");
+        expect(result.code).toMatchInlineSnapshot(`""`);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`
+          "x Error processing barrel import: E_UNRESOLVED_EXPORTS: The following exports were not found in the barrel file /cwd/tests/fixtures/src/features/f1/index.ts: Action
+             ,-[/cwd/tests/fixtures/src/pages/test/page.ts:2:1]
+           1 | 
+           2 |                 import { Action } from "#features/f1";
+             :                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           3 |                 console.log(Action);
+           4 |             
+             \`----"
+        `);
     });
 
     it("should handle imports from barrel files with code", async () => {
         await file("src/features/with-code/index.ts", 'export const VERSION = "1.0.0";');
 
-        const res = transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/with-code.ts"),
             code: `
                 import { VERSION } from "#features/with-code";
@@ -451,7 +633,18 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        await expect(res).rejects.toThrow("E_INVALID_BARREL_FILE");
+        expect(result.code).toMatchInlineSnapshot(`""`);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`
+          "x Error processing barrel import: E_INVALID_BARREL_FILE: Invalid barrel file /cwd/tests/fixtures/src/features/with-code/index.ts: Barrel file contains non-export code: Variable declarations are not allowed in barrel files
+             ,-[/cwd/tests/fixtures/src/pages/test/with-code.ts:2:1]
+           1 | 
+           2 |                 import { VERSION } from "#features/with-code";
+             :                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           3 |                 console.log(VERSION);
+           4 |             
+             \`----"
+        `);
     });
 
     it("should handle imports from files that couldn't be parsed", async () => {
@@ -464,7 +657,7 @@ describe("SWC Barrel Files Transformation", () => {
             `,
         );
 
-        const res = transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/invalid.ts"),
             code: `
                 import { Button } from "#features/invalid";
@@ -473,13 +666,24 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        await expect(res).rejects.toThrow("E_FILE_PARSE");
+        expect(result.code).toMatchInlineSnapshot(`""`);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`
+          "x Error processing barrel import: E_FILE_PARSE: Failed to parse file: Error { error: (118..119, Unexpected { got: "=", expected: "yield, an identifier, [ or {" }) }
+             ,-[/cwd/tests/fixtures/src/pages/test/invalid.ts:2:1]
+           1 | 
+           2 |                 import { Button } from "#features/invalid";
+             :                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           3 |                 console.log(Button);
+           4 |             
+             \`----"
+        `);
     });
 
     it("should handle re-exports using absolute paths", async () => {
         await file("src/features/re-export/index.ts", 'export { Button } from "/root/src/components/Button";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/re-export.ts"),
             code: `
                 import { Button } from "#features/re-export";
@@ -488,17 +692,19 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "/root/src/components/Button";
           console.log(Button);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should handle re-exports from packages", async () => {
         await file("src/features/re-export/index.ts", 'export { Button } from "ui-lib";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/re-export.ts"),
             code: `
                 import { Button } from "#features/re-export";
@@ -507,17 +713,19 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "ui-lib";
           console.log(Button);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should handle absolute paths in imports", async () => {
         await file("src/features/absolute/index.ts", 'export { Button } from "./components/Button";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/absolute.ts"),
             code: `
                 import { Button } from "${path.join(fixturesDir, "src/features/absolute/index.ts")}";
@@ -526,17 +734,19 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "../../features/absolute/components/Button";
           console.log(Button);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should ignore absolute paths outside cwd", async () => {
         await file("src/features/absolute/index.ts", 'export { Button } from "./components/Button";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/absolute.ts"),
             code: `
                 import { Button } from "/root/file.ts";
@@ -545,11 +755,13 @@ describe("SWC Barrel Files Transformation", () => {
             config: defaultConfig,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "/root/file.ts";
           console.log(Button);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should use context to resolve aliases", async () => {
@@ -575,7 +787,7 @@ describe("SWC Barrel Files Transformation", () => {
             ],
         };
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "lib-a/src/pages/test/test1.ts"),
             code: `
                 import { Button } from "#features/some";
@@ -584,13 +796,15 @@ describe("SWC Barrel Files Transformation", () => {
             config,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "../../features/some/components/Button";
           console.log(Button);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
 
-        const outputCode2 = await transpileWithSwc({
+        const result2 = await transpileWithSwc({
             filename: path.join(fixturesDir, "lib-b/src/pages/test/test1.ts"),
             code: `
                 import { select } from "#features/some";
@@ -599,17 +813,19 @@ describe("SWC Barrel Files Transformation", () => {
             config,
         });
 
-        expect(outputCode2).toMatchInlineSnapshot(`
+        expect(result2.code).toMatchInlineSnapshot(`
           "import { select } from "../../features/some/model/selectors";
           console.log(select);
           "
         `);
+        expect(result2.stdout).toMatchInlineSnapshot(`""`);
+        expect(result2.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should match barrel files without aliases", async () => {
         await file("src/features/some/index.ts", 'export { Button } from "./components/Button";');
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/test1.ts"),
             code: `
                 import { Button } from "../../features/some/index.ts";
@@ -621,15 +837,17 @@ describe("SWC Barrel Files Transformation", () => {
             },
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "../../features/some/components/Button";
           console.log(Button);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should skip files outside cwd", async () => {
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: "/dev/null",
             code: `
                 import { Button } from "/dev/null";
@@ -641,11 +859,13 @@ describe("SWC Barrel Files Transformation", () => {
             },
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           "import { Button } from "/dev/null";
           console.log(Button);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
     it("should works with commonjs compilation target", async () => {
@@ -657,7 +877,7 @@ describe("SWC Barrel Files Transformation", () => {
             `,
         );
 
-        const outputCode = await transpileWithSwc({
+        const result = await transpileWithSwc({
             filename: path.join(fixturesDir, "src/pages/test/test1.ts"),
             code: `
                 import { Button, select, type SomeType } from "#features/some";
@@ -669,7 +889,7 @@ describe("SWC Barrel Files Transformation", () => {
             cjs: true,
         });
 
-        expect(outputCode).toMatchInlineSnapshot(`
+        expect(result.code).toMatchInlineSnapshot(`
           ""use strict";
           Object.defineProperty(exports, "__esModule", {
               value: true
@@ -679,5 +899,351 @@ describe("SWC Barrel Files Transformation", () => {
           console.log(_Button.Button, _selectors.select);
           "
         `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
+    });
+
+    describe("unsupported_import_mode configuration", () => {
+        it("should error on namespace imports by default", async () => {
+            await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/namespace.ts"),
+                code: `
+                    import * as f1 from "#features/f1";
+                    console.log(f1);
+                `,
+                config: defaultConfig,
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`""`);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`
+              "x Error processing barrel import: E_NO_NAMESPACE_IMPORTS: Namespace imports are not supported for barrel file optimization
+                 ,-[/cwd/tests/fixtures/src/pages/test/namespace.ts:2:1]
+               1 | 
+               2 |                     import * as f1 from "#features/f1";
+                 :                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               3 |                     console.log(f1);
+               4 |                 
+                 \`----"
+            `);
+        });
+
+        it("should error on namespace imports when mode is 'error'", async () => {
+            await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/namespace.ts"),
+                code: `
+                    import * as f1 from "#features/f1";
+                    console.log(f1);
+                `,
+                config: {
+                    ...defaultConfig,
+                    unsupported_import_mode: "error",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`""`);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`
+              "x Error processing barrel import: E_NO_NAMESPACE_IMPORTS: Namespace imports are not supported for barrel file optimization
+                 ,-[/cwd/tests/fixtures/src/pages/test/namespace.ts:2:1]
+               1 | 
+               2 |                     import * as f1 from "#features/f1";
+                 :                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               3 |                     console.log(f1);
+               4 |                 
+                 \`----"
+            `);
+        });
+
+        it("should warn on namespace imports when mode is 'warn'", async () => {
+            await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/namespace.ts"),
+                code: `
+                        import * as f1 from "#features/f1";
+                        console.log(f1);
+                    `,
+                config: {
+                    ...defaultConfig,
+                    unsupported_import_mode: "warn",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+                  "import * as f1 from "#features/f1";
+                  console.log(f1);
+                  "
+                `);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(
+                `"Warning: Namespace imports are not supported for barrel file optimization. Import from #features/f1 will be skipped."`,
+            );
+        });
+
+        it("should ignore namespace imports when mode is 'off'", async () => {
+            await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/namespace.ts"),
+                code: `
+                    import * as f1 from "#features/f1";
+                    console.log(f1);
+                `,
+                config: {
+                    ...defaultConfig,
+                    unsupported_import_mode: "off",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import * as f1 from "#features/f1";
+              console.log(f1);
+              "
+            `);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
+        it("should handle mixed imports with namespace import skipped", async () => {
+            await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/mixed.ts"),
+                code: `
+                    import * as f1 from "#features/f1";
+                    import { Button } from "#features/f1";
+                    console.log(Button, f1);
+                `,
+                config: {
+                    ...defaultConfig,
+                    unsupported_import_mode: "off",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import * as f1 from "#features/f1";
+              import { Button } from "../../features/f1/components/Button";
+              console.log(Button, f1);
+              "
+            `);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
+        it("should reject invalid unsupported_import_mode values", async () => {
+            await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/invalid-config.ts"),
+                code: `
+                    import { Button } from "#features/f1";
+                    console.log(Button);
+                `,
+                config: {
+                    ...defaultConfig,
+                    unsupported_import_mode: "invalid" as any,
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`""`);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`
+              "thread '<unnamed>' panicked at src/lib.rs:40:6:
+              E_INVALID_CONFIG: Error parsing barrel plugin configuration: Error("Invalid unsupported_import_mode 'invalid'. Valid options are: error, warn, off", line: 1, column: ?)
+              note: run with \`RUST_BACKTRACE=1\` environment variable to display a backtrace
+              plugin
+
+                x failed to invoke plugin on 'Some("/cwd/tests/fixtures/src/pages/test/invalid-config.ts")'"
+            `);
+        });
+    });
+
+    describe("invalid_barrel_mode configuration", () => {
+        it("should error on invalid barrel files by default", async () => {
+            await file("src/features/invalid/index.ts", 'export * from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/invalid.ts"),
+                code: `
+                    import { Button } from "#features/invalid";
+                    console.log(Button);
+                `,
+                config: defaultConfig,
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`""`);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`
+              "x Error processing barrel import: E_INVALID_BARREL_FILE: Invalid barrel file /cwd/tests/fixtures/src/features/invalid/index.ts: Wildcard exports are not supported in barrel files: Wildcard exports are not allowed in barrel files
+                 ,-[/cwd/tests/fixtures/src/pages/test/invalid.ts:2:1]
+               1 | 
+               2 |                     import { Button } from "#features/invalid";
+                 :                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               3 |                     console.log(Button);
+               4 |                 
+                 \`----"
+            `);
+        });
+
+        it("should error on invalid barrel files when mode is 'error'", async () => {
+            await file("src/features/invalid/index.ts", 'export * from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/invalid.ts"),
+                code: `
+                    import { Button } from "#features/invalid";
+                    console.log(Button);
+                `,
+                config: {
+                    ...defaultConfig,
+                    invalid_barrel_mode: "error",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`""`);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`
+              "x Error processing barrel import: E_INVALID_BARREL_FILE: Invalid barrel file /cwd/tests/fixtures/src/features/invalid/index.ts: Wildcard exports are not supported in barrel files: Wildcard exports are not allowed in barrel files
+                 ,-[/cwd/tests/fixtures/src/pages/test/invalid.ts:2:1]
+               1 | 
+               2 |                     import { Button } from "#features/invalid";
+                 :                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               3 |                     console.log(Button);
+               4 |                 
+                 \`----"
+            `);
+        });
+
+        it("should warn on invalid barrel files when mode is 'warn'", async () => {
+            await file("src/features/invalid/index.ts", 'export * from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/invalid.ts"),
+                code: `
+                    import { Button } from "#features/invalid";
+                    console.log(Button);
+                `,
+                config: {
+                    ...defaultConfig,
+                    invalid_barrel_mode: "warn",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { Button } from "#features/invalid";
+              console.log(Button);
+              "
+            `);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(
+                `"Warning: E_INVALID_BARREL_FILE: Invalid barrel file /cwd/tests/fixtures/src/features/invalid/index.ts: Wildcard exports are not supported in barrel files: Wildcard exports are not allowed in barrel files"`,
+            );
+        });
+
+        it("should ignore invalid barrel files when mode is 'off'", async () => {
+            await file("src/features/invalid/index.ts", 'export * from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/invalid.ts"),
+                code: `
+                    import { Button } from "#features/invalid";
+                    console.log(Button);
+                `,
+                config: {
+                    ...defaultConfig,
+                    invalid_barrel_mode: "off",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { Button } from "#features/invalid";
+              console.log(Button);
+              "
+            `);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
+        it("should handle barrel files with variable declarations when mode is 'warn'", async () => {
+            await file("src/features/with-vars/index.ts", 'export const VERSION = "1.0.0";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/with-vars.ts"),
+                code: `
+                    import { VERSION } from "#features/with-vars";
+                    console.log(VERSION);
+                `,
+                config: {
+                    ...defaultConfig,
+                    invalid_barrel_mode: "warn",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { VERSION } from "#features/with-vars";
+              console.log(VERSION);
+              "
+            `);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(
+                `"Warning: E_INVALID_BARREL_FILE: Invalid barrel file /cwd/tests/fixtures/src/features/with-vars/index.ts: Barrel file contains non-export code: Variable declarations are not allowed in barrel files"`,
+            );
+        });
+
+        it("should handle barrel files with namespace exports when mode is 'off'", async () => {
+            await file("src/features/namespace/index.ts", 'export * as components from "./components";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/namespace.ts"),
+                code: `
+                    import { components } from "#features/namespace";
+                    console.log(components);
+                `,
+                config: {
+                    ...defaultConfig,
+                    invalid_barrel_mode: "off",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { components } from "#features/namespace";
+              console.log(components);
+              "
+            `);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
+        it("should reject invalid invalid_barrel_mode values", async () => {
+            await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/invalid-config.ts"),
+                code: `
+                    import { Button } from "#features/f1";
+                    console.log(Button);
+                `,
+                config: {
+                    ...defaultConfig,
+                    invalid_barrel_mode: "invalid" as any,
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`""`);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`
+              "thread '<unnamed>' panicked at src/lib.rs:40:6:
+              E_INVALID_CONFIG: Error parsing barrel plugin configuration: Error("Invalid invalid_barrel_mode 'invalid'. Valid options are: error, warn, off", line: 1, column: ?)
+              note: run with \`RUST_BACKTRACE=1\` environment variable to display a backtrace
+              plugin
+
+                x failed to invoke plugin on 'Some("/cwd/tests/fixtures/src/pages/test/invalid-config.ts")'"
+            `);
+        });
     });
 });

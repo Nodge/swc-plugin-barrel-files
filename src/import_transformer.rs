@@ -1,3 +1,4 @@
+use crate::config::{Config, InvalidBarrelMode, UnsupportedImportMode};
 use crate::paths::{dirname, path_join, resolve_relative_path};
 use crate::re_export::{analyze_barrel_file, ReExport};
 use once_cell::sync::Lazy;
@@ -18,7 +19,7 @@ use swc_core::ecma::ast::{
 use swc_core::ecma::parser::{parse_file_as_module, Syntax};
 
 /// Cache for parsed barrel files to avoid re-parsing the same file
-static BARREL_CACHE: Lazy<Mutex<HashMap<String, Vec<ReExport>>>> =
+static BARREL_CACHE: Lazy<Mutex<HashMap<String, Option<Vec<ReExport>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Finds a re-export by name in the list of re-exports
@@ -115,6 +116,7 @@ fn extract_imported_name(named: &ImportNamedSpecifier) -> String {
 /// * `source_dir` - The directory containing the current source file
 /// * `import_decl` - The import declaration to transform
 /// * `barrel_file` - The path to the barrel file
+/// * `config` - The plugin configuration
 ///
 /// # Returns
 ///
@@ -123,87 +125,103 @@ pub fn transform_import(
     source_dir: &str,
     import_decl: &ImportDecl,
     barrel_file: &str,
-) -> Result<Vec<ImportDecl>, String> {
+    config: &Config,
+) -> Result<Option<Vec<ImportDecl>>, String> {
     let mut new_imports = HashMap::new();
     let mut missing_exports = Vec::new();
 
     let barrel_file_dir = dirname(barrel_file);
 
-    let re_exports = parse_barrel_file_exports(barrel_file)?;
+    let re_exports = parse_barrel_file_exports(barrel_file, config)?;
 
-    for specifier in &import_decl.specifiers {
-        match specifier {
-            ImportSpecifier::Named(named) => {
-                let imported_name = extract_imported_name(named);
+    if let Some(re_exports) = re_exports {
+        for specifier in &import_decl.specifiers {
+            match specifier {
+                ImportSpecifier::Named(named) => {
+                    let imported_name = extract_imported_name(named);
 
-                if let Some(re_export) = find_re_export_by_name(&re_exports, &imported_name) {
-                    let import_path = resolve_import_path(&barrel_file_dir, source_dir, re_export);
+                    if let Some(re_export) = find_re_export_by_name(&re_exports, &imported_name) {
+                        let import_path =
+                            resolve_import_path(&barrel_file_dir, source_dir, re_export);
 
-                    let new_specifier = if re_export.is_default {
-                        create_default_specifier(named.span, &named.local)
+                        let new_specifier = if re_export.is_default {
+                            create_default_specifier(named.span, &named.local)
+                        } else {
+                            create_named_specifier(
+                                named.span,
+                                &named.local,
+                                re_export,
+                                named.is_type_only,
+                            )
+                        };
+
+                        add_import_specifier(&mut new_imports, import_path, new_specifier);
                     } else {
-                        create_named_specifier(
-                            named.span,
-                            &named.local,
-                            re_export,
-                            named.is_type_only,
-                        )
-                    };
-
-                    add_import_specifier(&mut new_imports, import_path, new_specifier);
-                } else {
-                    missing_exports.push(imported_name.clone());
+                        missing_exports.push(imported_name.clone());
+                    }
                 }
-            }
-            ImportSpecifier::Default(default) => {
-                // Look for a re-export of the default export
-                if let Some(re_export) = find_default_re_export(&re_exports) {
-                    let import_path = resolve_import_path(&barrel_file_dir, source_dir, re_export);
-                    let new_specifier = create_default_specifier(default.span, &default.local);
+                ImportSpecifier::Default(default) => {
+                    // Look for a re-export of the default export
+                    if let Some(re_export) = find_default_re_export(&re_exports) {
+                        let import_path =
+                            resolve_import_path(&barrel_file_dir, source_dir, re_export);
+                        let new_specifier = create_default_specifier(default.span, &default.local);
 
-                    add_import_specifier(&mut new_imports, import_path, new_specifier);
-                } else {
-                    // The default export was not found in the barrel file
-                    missing_exports.push("default".to_string());
+                        add_import_specifier(&mut new_imports, import_path, new_specifier);
+                    } else {
+                        // The default export was not found in the barrel file
+                        missing_exports.push("default".to_string());
+                    }
                 }
-            }
-            ImportSpecifier::Namespace(_) => {
-                return Err(
-                    "E_NO_NAMESPACE_IMPORTS: Namespace imports are not supported for barrel file optimization".to_string(),
-                );
+                ImportSpecifier::Namespace(_) => match config.unsupported_import_mode {
+                    UnsupportedImportMode::Error => {
+                        return Err(
+                            "E_NO_NAMESPACE_IMPORTS: Namespace imports are not supported for barrel file optimization".to_string(),
+                        );
+                    }
+                    UnsupportedImportMode::Warn => {
+                        eprintln!("Warning: Namespace imports are not supported for barrel file optimization. Import from {} will be skipped.", import_decl.src.value);
+                        continue;
+                    }
+                    UnsupportedImportMode::Off => {
+                        continue;
+                    }
+                },
             }
         }
-    }
 
-    // Check if any imports were not found in the barrel file
-    if !missing_exports.is_empty() {
-        return Err(format!(
+        // Check if any imports were not found in the barrel file
+        if !missing_exports.is_empty() {
+            return Err(format!(
             "E_UNRESOLVED_EXPORTS: The following exports were not found in the barrel file {}: {}",
             barrel_file,
             missing_exports.join(", ")
         ));
+        }
+
+        // Create new import declarations for each source path
+        let mut result = Vec::new();
+        for (source_path, specifiers) in new_imports {
+            let new_import = ImportDecl {
+                span: import_decl.span,
+                specifiers,
+                src: Box::new(Str {
+                    span: DUMMY_SP,
+                    value: source_path.into(),
+                    raw: None,
+                }),
+                type_only: import_decl.type_only,
+                with: import_decl.with.clone(),
+                phase: Default::default(),
+            };
+
+            result.push(new_import);
+        }
+
+        Ok(Some(result))
+    } else {
+        Ok(None)
     }
-
-    // Create new import declarations for each source path
-    let mut result = Vec::new();
-    for (source_path, specifiers) in new_imports {
-        let new_import = ImportDecl {
-            span: import_decl.span,
-            specifiers,
-            src: Box::new(Str {
-                span: DUMMY_SP,
-                value: source_path.into(),
-                raw: None,
-            }),
-            type_only: import_decl.type_only,
-            with: import_decl.with.clone(),
-            phase: Default::default(),
-        };
-
-        result.push(new_import);
-    }
-
-    Ok(result)
 }
 
 /// Parses a file into an AST
@@ -229,11 +247,15 @@ fn parse_file(file_path: &str) -> Result<Module, String> {
 /// # Arguments
 ///
 /// * `file_path` - The path to the barrel file
+/// * `config` - The plugin configuration
 ///
 /// # Returns
 ///
 /// A list of re-exports if the file is a valid barrel file, `Err` otherwise
-fn parse_barrel_file_exports(file_path: &str) -> Result<Vec<ReExport>, String> {
+fn parse_barrel_file_exports(
+    file_path: &str,
+    config: &Config,
+) -> Result<Option<Vec<ReExport>>, String> {
     if let Ok(cache) = BARREL_CACHE.lock() {
         if let Some(cached_exports) = cache.get(file_path) {
             return Ok(cached_exports.clone());
@@ -252,14 +274,33 @@ fn parse_barrel_file_exports(file_path: &str) -> Result<Vec<ReExport>, String> {
             }
 
             if let Ok(mut cache) = BARREL_CACHE.lock() {
-                cache.insert(file_path.to_string(), re_exports.clone());
+                cache.insert(file_path.to_string(), Some(re_exports.clone()));
             }
 
-            Ok(re_exports)
+            Ok(Some(re_exports))
         }
-        Err(e) => Err(format!(
-            "E_INVALID_BARREL_FILE: Invalid barrel file {}: {}",
-            file_path, e
-        )),
+        Err(e) => {
+            let error_msg = format!(
+                "E_INVALID_BARREL_FILE: Invalid barrel file {}: {}",
+                file_path, e
+            );
+
+            match config.invalid_barrel_mode {
+                InvalidBarrelMode::Error => Err(error_msg),
+                InvalidBarrelMode::Warn => {
+                    eprintln!("Warning: {}", error_msg);
+                    if let Ok(mut cache) = BARREL_CACHE.lock() {
+                        cache.insert(file_path.to_string(), None);
+                    }
+                    Ok(None)
+                }
+                InvalidBarrelMode::Off => {
+                    if let Ok(mut cache) = BARREL_CACHE.lock() {
+                        cache.insert(file_path.to_string(), None);
+                    }
+                    Ok(None)
+                }
+            }
+        }
     }
 }

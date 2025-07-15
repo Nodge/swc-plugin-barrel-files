@@ -29,6 +29,9 @@ pub struct BarrelTransformVisitor {
 
     /// Enable debug logging
     debug: bool,
+
+    /// Plugin configuration
+    config: Config,
 }
 
 fn log(message: String) {
@@ -76,6 +79,7 @@ impl BarrelTransformVisitor {
             alias_resolver,
             compiled_patterns,
             debug: config.debug.unwrap_or_default(),
+            config: config.to_owned(),
         };
 
         visitor.log(format!("Parsing {}", source_file_virtual_path));
@@ -154,28 +158,33 @@ impl BarrelTransformVisitor {
     ) -> Result<Option<Vec<ImportDecl>>, String> {
         self.log(format!("    found barrel file: {}", barrel_file));
 
-        let new_imports = transform_import(&self.source_dir, import_decl, barrel_file)?;
+        let new_imports =
+            transform_import(&self.source_dir, import_decl, barrel_file, &self.config)?;
 
-        if self.debug {
-            self.log("    replacing with:".into());
+        if let Some(new_imports) = new_imports {
+            if self.debug {
+                self.log("    replacing with:".into());
 
-            for new_import in new_imports.iter() {
-                let source = &new_import.src.value;
-                for specifier in &new_import.specifiers {
-                    let specifier_name = match specifier {
-                        ImportSpecifier::Named(named) => &named.local.sym,
-                        ImportSpecifier::Default(default) => &default.local.sym,
-                        ImportSpecifier::Namespace(namespace) => &namespace.local.sym,
-                    };
-                    self.log(format!(
-                        "        import {{ {} }} from \"{}\"",
-                        specifier_name, source
-                    ));
+                for new_import in new_imports.iter() {
+                    let source = &new_import.src.value;
+                    for specifier in &new_import.specifiers {
+                        let specifier_name = match specifier {
+                            ImportSpecifier::Named(named) => &named.local.sym,
+                            ImportSpecifier::Default(default) => &default.local.sym,
+                            ImportSpecifier::Namespace(namespace) => &namespace.local.sym,
+                        };
+                        self.log(format!(
+                            "        import {{ {} }} from \"{}\"",
+                            specifier_name, source
+                        ));
+                    }
                 }
             }
-        }
 
-        Ok(Some(new_imports))
+            Ok(Some(new_imports))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Matches an import path against the configured patterns using pre-compiled patterns
