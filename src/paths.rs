@@ -7,9 +7,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// Virtual filesystem root directory
-pub const SWC_VIRTUAL_FS_ROOT_DIR: &str = "/cwd";
-
 /// Cache for file existence checks
 static FILE_EXISTS_CACHE: Lazy<Mutex<HashMap<String, bool>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -39,34 +36,6 @@ pub fn file_exists(path: &str) -> bool {
     }
 
     exists
-}
-
-/// Resolves a path to a virtual path
-///
-/// # Arguments
-///
-/// * `cwd` - Compilation working directory
-/// * `path` - The path to resolve
-///
-/// # Returns
-///
-/// The resolved virtual path
-pub fn to_virtual_path(cwd: &str, path: &str) -> Result<String, String> {
-    if path.starts_with(cwd) {
-        let without_cwd = &path[cwd.len() + 1..];
-        let result = path_join(SWC_VIRTUAL_FS_ROOT_DIR, without_cwd);
-        return Ok(result);
-    }
-
-    if Path::new(&path).is_absolute() {
-        return Err(format!(
-            "E_INVALID_FILE_PATH: Absolute paths not starting with cwd are not supported: {}",
-            path
-        ));
-    }
-
-    let result = path_join(SWC_VIRTUAL_FS_ROOT_DIR, path);
-    Ok(result)
 }
 
 /// Calculates a relative path from one absolute path to another
@@ -107,8 +76,8 @@ pub fn resolve_relative_path(from_path: &str, to_path: &str) -> Option<String> {
 /// # Returns
 ///
 /// A normalized joined path string
-pub fn path_join(path: &str, path2: &str) -> String {
-    let joined_path = Path::new(path).join(path2);
+pub fn path_join(base_path: &str, path: &str) -> String {
+    let joined_path = Path::new(base_path).join(path);
     normalize_path(&joined_path)
 }
 
@@ -127,11 +96,16 @@ pub fn normalize_path(path: &Path) -> String {
     for component in path.components() {
         match component {
             std::path::Component::ParentDir => {
-                // Remove the last component if it exists (to handle ..)
+                // Remove the last component if it exists and it's a normal component (to handle ..)
                 if !components.is_empty()
                     && !matches!(components.last(), Some(std::path::Component::RootDir))
+                    && !matches!(components.last(), Some(std::path::Component::ParentDir))
                 {
                     components.pop();
+                } else if matches!(components.last(), Some(std::path::Component::RootDir)) {
+                    // If we're at root and need to go up, replace root with ..
+                    components.pop(); // Remove the root
+                    components.push(component); // Add the ..
                 } else {
                     // If we're already at the root or the path starts with .., keep it
                     components.push(component);
@@ -208,37 +182,6 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_to_virtual_path() {
-        // Test with path starting with cwd
-        let cwd = "/home/user/project";
-        let path = "/home/user/project/src/main.rs";
-        assert_eq!(to_virtual_path(cwd, path).unwrap(), "/cwd/src/main.rs");
-
-        // Test with relative path
-        let path = "src/main.rs";
-        assert_eq!(to_virtual_path(cwd, path).unwrap(), "/cwd/src/main.rs");
-
-        // Test with relative path starting with ./
-        let path = "./src/main.rs";
-        assert_eq!(to_virtual_path(cwd, path).unwrap(), "/cwd/src/main.rs");
-
-        // Test with nested ./ in the path
-        let path = "tests/./fixtures/src/features/f1/index.ts";
-        assert_eq!(
-            to_virtual_path(cwd, path).unwrap(),
-            "/cwd/tests/fixtures/src/features/f1/index.ts"
-        );
-
-        // Test with absolute path not starting with cwd
-        let path = "/other/path/file.rs";
-        assert!(to_virtual_path(cwd, path).is_err());
-        assert_eq!(
-            to_virtual_path(cwd, path).unwrap_err(),
-            "E_INVALID_FILE_PATH: Absolute paths not starting with cwd are not supported: /other/path/file.rs"
-        );
-    }
-
-    #[test]
     fn test_dirname() {
         // Test with normal path
         assert_eq!(dirname("/path/to/file.txt"), "/path/to");
@@ -277,6 +220,36 @@ mod tests {
         // Edge cases
         assert_eq!(normalize_path(Path::new(".")), "");
         assert_eq!(normalize_path(Path::new("a/..")), "");
+
+        // Going beyond root directory
+        assert_eq!(normalize_path(Path::new("/a/../..")), "..");
+        assert_eq!(normalize_path(Path::new("/a/../../b")), "../b");
+        assert_eq!(normalize_path(Path::new("/a/b/../../../c")), "../c");
+
+        // Multiple parent directories at start
+        assert_eq!(normalize_path(Path::new("../a/b")), "../a/b");
+        assert_eq!(normalize_path(Path::new("../../a")), "../../a");
+        assert_eq!(
+            normalize_path(Path::new("../../../a/b/c")),
+            "../../../a/b/c"
+        );
+
+        // Mixed cases with parent directories
+        assert_eq!(normalize_path(Path::new("../a/../b")), "../b");
+        assert_eq!(normalize_path(Path::new("../../a/b/../c")), "../../a/c");
+
+        // Complex cases with current directory
+        assert_eq!(normalize_path(Path::new("./a/../b")), "b");
+        assert_eq!(normalize_path(Path::new("a/./b/../c")), "a/c");
+
+        // Empty path components
+        assert_eq!(normalize_path(Path::new("a//b")), "a/b");
+        assert_eq!(normalize_path(Path::new("a/./b//c")), "a/b/c");
+
+        // Root directory edge cases
+        assert_eq!(normalize_path(Path::new("/")), "/");
+        assert_eq!(normalize_path(Path::new("/..")), "..");
+        assert_eq!(normalize_path(Path::new("/.")), "/");
     }
 
     #[test]
@@ -292,6 +265,7 @@ mod tests {
         assert_eq!(path_join("a/b", "../c"), "a/c");
         assert_eq!(path_join("a/b", "./c"), "a/b/c");
         assert_eq!(path_join("a/b", "../../c"), "c");
+        assert_eq!(path_join("/cwd/a", "../../../c"), "../c");
 
         // Handling of multiple slashes and normalization
         assert_eq!(path_join("a//b", "c"), "a/b/c");

@@ -202,6 +202,105 @@ You can limit aliases to specific directories using the `context` option. This a
 }
 ```
 
+### Symlinks Configuration
+
+The plugin supports symlinks configuration to work with external files and directories outside the current working directory. This is particularly useful in monorepo setups or when working with external libraries that need barrel file optimization.
+
+**Note**: Due to SWC plugin limitations, the plugin can only access files within the current working directory. The symlinks feature works by mapping external paths to internal symlinked paths, allowing you to process external barrel files as if they were inside your project.
+
+```json
+{
+    "jsc": {
+        "experimental": {
+            "plugins": [
+                [
+                    "swc-plugin-barrel-files",
+                    {
+                        "patterns": ["src/modules/*/index.ts"],
+                        "symlinks": {
+                            "../external-lib/index.ts": "./node_modules/external-lib/index.ts",
+                            "../shared-workspace": "./symlinks/workspace/src"
+                        }
+                    }
+                ]
+            ]
+        }
+    }
+}
+```
+
+The symlinks configuration maps external paths (outside the current working directory) to internal symlinked paths (inside the current working directory). When the plugin encounters an import from an external path, it:
+
+1. Checks if the path matches any symlink mapping
+2. Resolves it to the internal symlinked path
+3. Processes the barrel file using the internal path
+4. Generates optimized direct imports
+
+#### File-Level vs Directory-Level Symlinks
+
+You can configure symlinks at both file and directory levels:
+
+```json
+{
+    "symlinks": {
+        // File-level symlink: maps a specific external file to an internal file
+        "../external-lib/index.ts": "./node_modules/external-lib/index.ts",
+
+        // Directory-level symlink: maps an entire external directory to an internal directory
+        "../shared-workspace": "./symlinks/workspace/src"
+    }
+}
+```
+
+**Priority**: File-level symlinks take priority over directory-level symlinks. If both match a path, the file-level symlink will be used.
+
+#### Example Usage
+
+Given the configuration above, these imports:
+
+```typescript
+import { Button, Input } from "../external-lib/index.ts";
+import { AuthService } from "../shared-workspace/features/auth/index.ts";
+```
+
+Will be resolved as if they were:
+
+```typescript
+// Resolved through file-level symlink
+import { Button, Input } from "./node_modules/external-lib/index.ts";
+
+// Resolved through directory-level symlink
+import { AuthService } from "./symlinks/workspace/src/features/auth/index.ts";
+```
+
+#### Integration with Aliases
+
+Symlinks work seamlessly with aliases. You can combine both features:
+
+```json
+{
+    "patterns": ["src/modules/*/index.ts"],
+    "aliases": [
+        {
+            "pattern": "@external/*",
+            "paths": ["../external-lib/src/*/index.ts"]
+        }
+    ],
+    "symlinks": {
+        "../external-lib": "./node_modules/external-lib"
+    }
+}
+```
+
+This allows you to use clean alias imports that resolve through symlinks:
+
+```typescript
+import { Button } from "@external/components";
+
+// resolves via alias and symlink
+import { Button } from "./node_modules/external-lib/components/index.ts";
+```
+
 ### Error Handling Configuration
 
 The plugin provides configurable error handling for unsupported import patterns and invalid barrel files:

@@ -6,14 +6,12 @@ use swc_core::ecma::visit::{noop_visit_mut_type, VisitMut, VisitMutWith};
 use crate::alias_resolver::AliasResolver;
 use crate::config::Config;
 use crate::import_transformer::transform_import;
-use crate::paths::{dirname, path_join, to_virtual_path};
+use crate::path_resolver::PathResolver;
+use crate::paths::{dirname, path_join};
 use crate::pattern_matcher::CompiledPattern;
 
 /// Visitor for transforming barrel file imports
 pub struct BarrelTransformVisitor {
-    /// Compilation working directory
-    cwd: String,
-
     /// Virtual path to the directory for the current file
     source_dir: String,
 
@@ -23,6 +21,9 @@ pub struct BarrelTransformVisitor {
 
     /// Resolver for import aliases
     alias_resolver: AliasResolver,
+
+    /// Resolver for file paths
+    path_resolver: PathResolver,
 
     /// Pre-compiled patterns for barrel files
     compiled_patterns: Vec<CompiledPattern>,
@@ -41,15 +42,9 @@ fn log(message: String) {
 impl BarrelTransformVisitor {
     /// Creates a new visitor with the specified configuration
     pub fn new(config: &Config, cwd: String, filename: String) -> Result<Option<Self>, String> {
-        let mut compiled_patterns = Vec::new();
-        for pattern in &config.patterns {
-            let joined_path = path_join(&cwd, pattern);
-            let virtual_path = to_virtual_path(&cwd, &joined_path)?;
+        let path_resolver = PathResolver::new(&config.symlinks, &cwd);
 
-            let compiled_pattern = CompiledPattern::new(&virtual_path)
-                .map_err(|e| format!("Failed to compile pattern '{}': {}", virtual_path, e))?;
-            compiled_patterns.push(compiled_pattern);
-        }
+        let compiled_patterns = Self::compile_patterns(&cwd, config, &path_resolver)?;
 
         // Normalize absolute path to the source file
         // swc/loader and swc/jest pass full `filepath`
@@ -67,16 +62,21 @@ impl BarrelTransformVisitor {
             return Ok(None);
         }
 
-        let source_file_virtual_path = to_virtual_path(&cwd, &source_file_path)?;
+        let source_file_virtual_path = path_resolver.to_virtual_path(&source_file_path)?;
         let source_dir = dirname(&source_file_virtual_path);
 
-        let alias_resolver = AliasResolver::new(config, &cwd, &source_file_virtual_path)?;
+        let alias_resolver = AliasResolver::new(
+            &config.aliases,
+            &path_resolver,
+            &cwd,
+            &source_file_virtual_path,
+        )?;
 
-        let visitor = BarrelTransformVisitor {
-            cwd,
+        let visitor = Self {
             source_dir,
             import_replacements: HashMap::new(),
             alias_resolver,
+            path_resolver,
             compiled_patterns,
             debug: config.debug.unwrap_or_default(),
             config: config.to_owned(),
@@ -85,6 +85,26 @@ impl BarrelTransformVisitor {
         visitor.log(format!("Parsing {}", source_file_virtual_path));
 
         Ok(Some(visitor))
+    }
+
+    fn compile_patterns(
+        cwd: &str,
+        config: &Config,
+        path_resolver: &PathResolver,
+    ) -> Result<Vec<CompiledPattern>, String> {
+        let mut compiled_patterns = Vec::new();
+
+        for pattern in &config.patterns {
+            let joined_path = path_join(cwd, pattern);
+            let virtual_path = path_resolver.to_virtual_path(&joined_path)?;
+
+            let compiled_pattern = CompiledPattern::new(&virtual_path)
+                .map_err(|e| format!("Failed to compile pattern '{}': {}", virtual_path, e))?;
+
+            compiled_patterns.push(compiled_pattern);
+        }
+
+        Ok(compiled_patterns)
     }
 
     fn process_import(&self, import_decl: &ImportDecl) -> Result<Option<Vec<ImportDecl>>, String> {
@@ -128,18 +148,22 @@ impl BarrelTransformVisitor {
     }
 
     fn resolve_local_import(&self, import_path: &str) -> Result<Option<String>, String> {
-        let barrel_file = if import_path.starts_with(".") {
+        let import_path = if import_path.starts_with(".") {
             path_join(&self.source_dir, import_path)
         } else {
-            match to_virtual_path(&self.cwd, import_path) {
-                Ok(resolved_path) => resolved_path,
-                Err(_) => {
-                    self.log(format!(
-                        "    file cannot be processed: {} (reason: outside cwd)",
-                        import_path
-                    ));
-                    return Ok(None);
-                }
+            import_path.into()
+        };
+
+        let resolved_import_path = self.path_resolver.resolve_path(&import_path);
+
+        let barrel_file = match self.path_resolver.to_virtual_path(&resolved_import_path) {
+            Ok(resolved_path) => resolved_path,
+            Err(_) => {
+                self.log(format!(
+                    "    file cannot be processed: {} (reason: outside cwd)",
+                    import_path
+                ));
+                return Ok(None);
             }
         };
 
@@ -272,14 +296,9 @@ impl VisitMut for BarrelTransformVisitor {
                     // Remove the original import
                     items.remove(index);
 
-                    // Sort replacements for deterministic output
-                    let mut sorted_replacements = replacements;
-                    sorted_replacements
-                        .sort_by(|a, b| a.src.value.to_string().cmp(&b.src.value.to_string()));
-
                     // Insert all replacements at the position of the removed import
                     let mut insert_pos = index;
-                    for import in sorted_replacements.into_iter() {
+                    for import in replacements.into_iter() {
                         items.insert(
                             insert_pos,
                             ModuleItem::ModuleDecl(swc_core::ecma::ast::ModuleDecl::Import(import)),

@@ -1,21 +1,17 @@
 use serde::{Deserialize, Deserializer};
+use std::collections::HashMap;
 use std::fmt;
 
 /// Mode for handling unsupported import patterns
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnsupportedImportMode {
     /// Throw an error and stop compilation
+    #[default]
     Error,
     /// Print a warning and skip the import
     Warn,
     /// Silently skip the import
     Off,
-}
-
-impl Default for UnsupportedImportMode {
-    fn default() -> Self {
-        UnsupportedImportMode::Error
-    }
 }
 
 impl fmt::Display for UnsupportedImportMode {
@@ -47,20 +43,15 @@ impl<'de> Deserialize<'de> for UnsupportedImportMode {
 }
 
 /// Mode for handling invalid barrel files
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InvalidBarrelMode {
     /// Throw an error and stop compilation
+    #[default]
     Error,
     /// Print a warning and skip the import
     Warn,
     /// Silently skip the import
     Off,
-}
-
-impl Default for InvalidBarrelMode {
-    fn default() -> Self {
-        InvalidBarrelMode::Error
-    }
 }
 
 impl fmt::Display for InvalidBarrelMode {
@@ -99,6 +90,9 @@ pub struct Config {
 
     /// Rules for resolving import aliases (optional)
     pub aliases: Option<Vec<Alias>>,
+
+    /// Symlink mappings from external paths to internal paths (optional)
+    pub symlinks: Option<HashMap<String, String>>,
 
     /// Enables debug logging to stdout
     pub debug: Option<bool>,
