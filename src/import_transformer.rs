@@ -65,7 +65,6 @@ fn create_named_specifier(
                     span: DUMMY_SP,
                     sym: re_export.original_name.clone().into(),
                     optional: false,
-                    ctxt: Default::default(),
                 }))
             } else {
                 // If the original name is the same as the local name, don't add the 'as' clause
@@ -217,7 +216,6 @@ pub fn transform_import(
                 }),
                 type_only: import_decl.type_only,
                 with: import_decl.with.clone(),
-                phase: Default::default(),
             };
 
             result.push(new_import);
