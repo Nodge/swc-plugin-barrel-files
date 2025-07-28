@@ -19,7 +19,15 @@ pub struct PathResolver {
 impl PathResolver {
     /// Creates a new PathResolver with the given configuration
     pub fn new(symlinks: &Option<HashMap<String, String>>, cwd: &str) -> Self {
-        let symlinks = symlinks.clone().unwrap_or_default();
+        let symlinks = symlinks
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(|(path_from, path_to)| {
+                let absolute_path = path_join(cwd, path_from);
+                (absolute_path, path_to.clone())
+            })
+            .collect();
 
         Self {
             cwd: cwd.into(),
@@ -37,14 +45,18 @@ impl PathResolver {
     ///
     /// The resolved path, or the original path if no symlink mapping applies
     pub fn resolve_path(&self, path: &str) -> String {
+        let absolute_path = path_join(&self.cwd, path);
+
         // First, try exact file-level symlink matches (highest priority)
-        if let Some(symlinked_path) = self.symlinks.get(path) {
+        if let Some(symlinked_path) = self.symlinks.get(&absolute_path) {
             return symlinked_path.clone();
         }
 
         // Then, try directory-level symlink matches
         for (external_path, internal_path) in &self.symlinks {
-            if let Some(resolved) = self.try_directory_symlink(path, external_path, internal_path) {
+            if let Some(resolved) =
+                self.try_directory_symlink(&absolute_path, external_path, internal_path)
+            {
                 return resolved;
             }
         }
@@ -128,6 +140,12 @@ impl PathResolver {
     ///
     /// The resolved virtual path
     pub fn to_virtual_path(&self, path: &str) -> Result<String, String> {
+        // TODO: TEST THIS
+        if path.starts_with(SWC_VIRTUAL_FS_ROOT_DIR) {
+            return Ok(path.to_string());
+        }
+        // END TODO
+
         if path.starts_with(&self.cwd) {
             let without_cwd = &path[self.cwd.len() + 1..];
             let result = path_join(SWC_VIRTUAL_FS_ROOT_DIR, without_cwd);
@@ -158,7 +176,7 @@ mod tests {
             "/cwd/src/ui/index.ts".to_string(),
         );
 
-        let resolver = PathResolver::new(&Some(symlinks), "/cwd");
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
 
         let resolved = resolver.resolve_path("../external/components/index.ts");
         assert_eq!(resolved, "/cwd/src/ui/index.ts");
@@ -172,10 +190,74 @@ mod tests {
             "/cwd/src/ui".to_string(),
         );
 
-        let resolver = PathResolver::new(&Some(symlinks), "/cwd");
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
 
         let resolved = resolver.resolve_path("../external/components/Button/index.ts");
         assert_eq!(resolved, "/cwd/src/ui/Button/index.ts");
+    }
+
+    #[test]
+    fn test_absolute_file_with_relative_symlink_resolution() {
+        let mut symlinks = HashMap::new();
+        symlinks.insert(
+            "../external/components".to_string(),
+            "/cwd/components".to_string(),
+        );
+        symlinks.insert(
+            "../external/components/file.ts".to_string(),
+            "/cwd/components/custom-file.ts".to_string(),
+        );
+
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
+
+        let resolved = resolver.resolve_path("/home/user/external/components/file.ts");
+        assert_eq!(resolved, "/cwd/components/custom-file.ts");
+    }
+
+    #[test]
+    fn test_absolute_directory_with_relative_symlink_resolution() {
+        let mut symlinks = HashMap::new();
+        symlinks.insert(
+            "../external/components".to_string(),
+            "/cwd/components".to_string(),
+        );
+
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
+
+        let resolved = resolver.resolve_path("/home/user/external/components/Button/index.ts");
+        assert_eq!(resolved, "/cwd/components/Button/index.ts");
+    }
+
+    #[test]
+    fn test_relative_file_with_absolute_symlink_resolution() {
+        let mut symlinks = HashMap::new();
+        symlinks.insert(
+            "/home/user/external/components".to_string(),
+            "/cwd/components".to_string(),
+        );
+        symlinks.insert(
+            "/home/user/external/components/file.ts".to_string(),
+            "/cwd/components/custom-file.ts".to_string(),
+        );
+
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
+
+        let resolved = resolver.resolve_path("../external/components/file.ts");
+        assert_eq!(resolved, "/cwd/components/custom-file.ts");
+    }
+
+    #[test]
+    fn test_relative_directory_with_absolute_symlink_resolution() {
+        let mut symlinks = HashMap::new();
+        symlinks.insert(
+            "/home/user/external/components".to_string(),
+            "/cwd/components".to_string(),
+        );
+
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
+
+        let resolved = resolver.resolve_path("../external/components/Button/index.ts");
+        assert_eq!(resolved, "/cwd/components/Button/index.ts");
     }
 
     #[test]
@@ -186,7 +268,7 @@ mod tests {
             "/cwd/src/ui".to_string(),
         );
 
-        let resolver = PathResolver::new(&Some(symlinks), "/cwd");
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
 
         let resolved = resolver.resolve_path("../external/components/Button/index.ts");
         assert_eq!(resolved, "/cwd/src/ui/Button/index.ts");
@@ -204,7 +286,7 @@ mod tests {
             "/cwd/src/special/index.ts".to_string(),
         );
 
-        let resolver = PathResolver::new(&Some(symlinks), "/cwd");
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
 
         // Specific file symlink should take priority
         let resolved = resolver.resolve_path("../external/components/Button/index.ts");
@@ -223,7 +305,7 @@ mod tests {
             "/cwd/src/ui".to_string(),
         );
 
-        let resolver = PathResolver::new(&Some(symlinks), "/cwd");
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
 
         let resolved = resolver.resolve_path("../other/path/index.ts");
         assert_eq!(resolved, "../other/path/index.ts");
@@ -231,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_empty_symlinks() {
-        let resolver = PathResolver::new(&Some(HashMap::new()), "/cwd");
+        let resolver = PathResolver::new(&Some(HashMap::new()), "/home/user/project");
 
         let resolved = resolver.resolve_path("../external/file.ts");
         assert_eq!(resolved, "../external/file.ts");
@@ -245,7 +327,7 @@ mod tests {
             "/cwd/src/features".to_string(),
         );
 
-        let resolver = PathResolver::new(&Some(symlinks), "/cwd");
+        let resolver = PathResolver::new(&Some(symlinks), "/home/user/project");
 
         let resolved = resolver.resolve_path("../../shared/workspace/features/auth/api/index.ts");
         assert_eq!(resolved, "/cwd/src/features/auth/api/index.ts");
@@ -281,6 +363,25 @@ mod tests {
         assert_eq!(
             resolver.to_virtual_path(path).unwrap_err(),
             "E_INVALID_FILE_PATH: Absolute paths not starting with cwd are not supported: /other/path/file.rs"
+        );
+    }
+
+    #[test]
+    fn test_to_virtual_path_already_virtual() {
+        let resolver = PathResolver::new(&Some(HashMap::new()), "/home/user/project");
+
+        // Test with path that already starts with virtual root
+        let path = "/cwd/src/components/index.ts";
+        assert_eq!(
+            resolver.to_virtual_path(path).unwrap(),
+            "/cwd/src/components/index.ts"
+        );
+
+        // Test with nested virtual path
+        let path = "/cwd/nested/deep/file.ts";
+        assert_eq!(
+            resolver.to_virtual_path(path).unwrap(),
+            "/cwd/nested/deep/file.ts"
         );
     }
 }
