@@ -29,6 +29,17 @@ export interface PluginConfig {
      */
     aliases?: AliasConfig[];
     /**
+     * An optional mapping of external paths to internal symlinked paths.
+     * This allows the plugin to process barrel files from external locations
+     * by mapping them to internal symlinked paths within the current working directory.
+     *
+     * @example
+     * {
+     *   "../shared-workspace/some-pkg/src/features": "./node_modules/some-pkg/src/features"
+     * }
+     */
+    symlinks?: Record<string, string>;
+    /**
      * Enables debug logging to stdout.
      * @default false
      */

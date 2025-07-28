@@ -201,7 +201,12 @@ pub fn transform_import(
 
         // Create new import declarations for each source path
         let mut result = Vec::new();
-        for (source_path, specifiers) in new_imports {
+
+        // Sort the imports by source path for deterministic output
+        let mut sorted_imports: Vec<_> = new_imports.into_iter().collect();
+        sorted_imports.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (source_path, specifiers) in sorted_imports {
             let new_import = ImportDecl {
                 span: import_decl.span,
                 specifiers,

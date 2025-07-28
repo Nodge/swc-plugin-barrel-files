@@ -4,8 +4,9 @@
 //! and finding corresponding barrel files. It handles pattern matching and path resolution
 //! to support dynamic imports and re-exports in the barrel files system.
 
-use crate::config::{Alias, Config};
-use crate::paths::{file_exists, path_join, to_virtual_path};
+use crate::config::Alias;
+use crate::path_resolver::PathResolver;
+use crate::paths::{file_exists, path_join};
 use crate::pattern_matcher::{apply_components_to_template, CompiledPattern};
 
 /// Pre-compiled path alias
@@ -19,25 +20,30 @@ struct CompiledAlias {
 
 /// Resolver for import aliases
 pub struct AliasResolver {
-    /// Compilation working directory
-    cwd: String,
-
     /// Pre-compiled aliases sorted by specificity (fewer wildcards first)
     compiled_aliases: Vec<CompiledAlias>,
+
+    /// Resolver for file paths
+    path_resolver: PathResolver,
 }
 
 impl AliasResolver {
     /// Creates a new visitor with the specified configuration
-    pub fn new(config: &Config, cwd: &str, source_file: &str) -> Result<Self, String> {
+    pub fn new(
+        aliases: &Option<Vec<Alias>>,
+        path_resolver: &PathResolver,
+        cwd: &str,
+        source_file: &str,
+    ) -> Result<Self, String> {
         let mut compiled_aliases = Vec::new();
 
         // Filter aliases by context and patterns
-        for alias in config.aliases.as_ref().unwrap_or(&Vec::new()) {
+        for alias in aliases.as_ref().unwrap_or(&Vec::new()) {
             let should_include = match &alias.context {
                 None => true,
                 Some(context) => context.iter().any(|ctx| {
                     let joined_path = path_join(cwd, ctx);
-                    if let Ok(virtual_path) = to_virtual_path(cwd, &joined_path) {
+                    if let Ok(virtual_path) = path_resolver.to_virtual_path(&joined_path) {
                         return source_file.starts_with(&virtual_path);
                     }
                     false
@@ -60,9 +66,9 @@ impl AliasResolver {
         compiled_aliases
             .sort_by_key(|compiled_alias| compiled_alias.compiled_pattern.wildcard_count);
 
-        Ok(AliasResolver {
-            cwd: cwd.to_owned(),
+        Ok(Self {
             compiled_aliases,
+            path_resolver: path_resolver.clone(),
         })
     }
 
@@ -89,7 +95,8 @@ impl AliasResolver {
 
             for path_template in compiled_alias.alias.paths.iter() {
                 let resolved_path = apply_components_to_template(path_template, &components);
-                let path = to_virtual_path(&self.cwd, &resolved_path)?;
+                let resolved_path = self.path_resolver.resolve_path(&resolved_path);
+                let path = self.path_resolver.to_virtual_path(&resolved_path)?;
 
                 if file_exists(&path) {
                     return Ok(Some(path));
@@ -143,17 +150,11 @@ mod tests {
             context: None,
         };
 
-        let config = Config {
-            aliases: Some(vec![rule2.clone(), rule1.clone()]),
-            patterns: vec![],
-            debug: None,
-            unsupported_import_mode: Default::default(),
-            invalid_barrel_mode: Default::default(),
-        };
-
+        let config = Some(vec![rule2.clone(), rule1.clone()]);
         let cwd = "/".to_string();
         let source_file = "/some/file".to_string();
-        let visitor = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+        let path_resolver = PathResolver::new(&None, &cwd);
+        let visitor = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // The more specific rule should be first in sorted_rules
         assert_eq!(
@@ -203,23 +204,18 @@ mod tests {
         };
 
         // Create config with all aliases
-        let config = Config {
-            aliases: Some(vec![
-                no_context_alias.clone(),
-                matching_context_alias.clone(),
-                non_matching_context_alias.clone(),
-                multiple_contexts_alias.clone(),
-            ]),
-            patterns: vec![],
-            debug: None,
-            unsupported_import_mode: Default::default(),
-            invalid_barrel_mode: Default::default(),
-        };
+        let config = Some(vec![
+            no_context_alias.clone(),
+            matching_context_alias.clone(),
+            non_matching_context_alias.clone(),
+            multiple_contexts_alias.clone(),
+        ]);
 
         // Test with source file in /cwd/src
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/src/components/Button.tsx".to_string();
-        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+        let path_resolver = PathResolver::new(&None, &cwd);
+        let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that aliases with no context or matching context are included
         assert_eq!(resolver.compiled_aliases.len(), 3);
@@ -260,22 +256,17 @@ mod tests {
         };
 
         // Create config with all aliases
-        let config = Config {
-            aliases: Some(vec![
-                no_context_alias.clone(),
-                matching_context_alias.clone(),
-                other_context_alias.clone(),
-            ]),
-            patterns: vec![],
-            debug: None,
-            unsupported_import_mode: Default::default(),
-            invalid_barrel_mode: Default::default(),
-        };
+        let config = Some(vec![
+            no_context_alias.clone(),
+            matching_context_alias.clone(),
+            other_context_alias.clone(),
+        ]);
 
         // Test with source file in /cwd/other
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/other/components/Button.tsx".to_string();
-        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+        let path_resolver = PathResolver::new(&None, &cwd);
+        let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that aliases with no context or matching context are included
         assert_eq!(resolver.compiled_aliases.len(), 2);
@@ -315,22 +306,17 @@ mod tests {
         };
 
         // Create config with all aliases
-        let config = Config {
-            aliases: Some(vec![
-                no_context_alias.clone(),
-                src_context_alias.clone(),
-                other_context_alias.clone(),
-            ]),
-            patterns: vec![],
-            debug: None,
-            unsupported_import_mode: Default::default(),
-            invalid_barrel_mode: Default::default(),
-        };
+        let config = Some(vec![
+            no_context_alias.clone(),
+            src_context_alias.clone(),
+            other_context_alias.clone(),
+        ]);
 
         // Test with source file in /cwd/tests which doesn't match any context
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/tests/components/Button.test.tsx".to_string();
-        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+        let path_resolver = PathResolver::new(&None, &cwd);
+        let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that only aliases with no context are included
         assert_eq!(resolver.compiled_aliases.len(), 1);
@@ -351,17 +337,11 @@ mod tests {
     #[test]
     fn test_empty_aliases_list() {
         // Create config with empty aliases list
-        let config = Config {
-            aliases: Some(vec![]),
-            patterns: vec![],
-            debug: None,
-            unsupported_import_mode: Default::default(),
-            invalid_barrel_mode: Default::default(),
-        };
-
+        let config = Some(vec![]);
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/src/components/Button.tsx".to_string();
-        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+        let path_resolver = PathResolver::new(&None, &cwd);
+        let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that the aliases list is empty
         assert_eq!(resolver.compiled_aliases.len(), 0);
@@ -374,17 +354,11 @@ mod tests {
     #[test]
     fn test_null_aliases_list() {
         // Create config with null aliases list
-        let config = Config {
-            aliases: None,
-            patterns: vec![],
-            debug: None,
-            unsupported_import_mode: Default::default(),
-            invalid_barrel_mode: Default::default(),
-        };
-
+        let config = None;
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/src/components/Button.tsx".to_string();
-        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+        let path_resolver = PathResolver::new(&None, &cwd);
+        let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that the aliases list is empty
         assert_eq!(resolver.compiled_aliases.len(), 0);
@@ -408,18 +382,13 @@ mod tests {
         };
 
         // Create config with the alias
-        let config = Config {
-            aliases: Some(vec![alias_with_multiple_contexts.clone()]),
-            patterns: vec![],
-            debug: None,
-            unsupported_import_mode: Default::default(),
-            invalid_barrel_mode: Default::default(),
-        };
+        let config = Some(vec![alias_with_multiple_contexts.clone()]);
 
         // Test with source file that matches multiple contexts
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/src/components/Button.tsx".to_string();
-        let resolver = AliasResolver::new(&config, &cwd, &source_file).unwrap();
+        let path_resolver = PathResolver::new(&None, &cwd);
+        let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that the alias is added only once
         assert_eq!(resolver.compiled_aliases.len(), 1);

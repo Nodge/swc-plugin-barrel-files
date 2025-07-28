@@ -15,6 +15,8 @@
         "postbuild": "cp target/wasm32-wasip1/release/swc_plugin_barrel_files.wasm .",
         "test": "vitest run",
         "test:watch": "vitest",
+        "perf": "tsx perf/run.ts",
+        "generate-perf-fixtures": "tsx perf/generate-fixtures.ts",
         "changeset": "changeset",
         "ci:version": "changeset version",
         "ci:release": "pnpm build && changeset publish"
@@ -34,9 +36,12 @@
     "devDependencies": {
         "@changesets/changelog-github": "^0.5.1",
         "@changesets/cli": "^2.29.5",
+        "@swc/cli": "0.7.8",
         "@swc/core": "1.12.11",
+        "@swc/plugin-noop": "9.0.0",
         "@types/node": "22.13.11",
         "prettier": "3.6.2",
+        "tsx": "4.20.3",
         "typescript": "5.8.3",
         "vitest": "3.2.4"
     },

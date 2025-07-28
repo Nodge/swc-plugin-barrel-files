@@ -6,6 +6,7 @@
 mod alias_resolver;
 mod config;
 mod import_transformer;
+mod path_resolver;
 mod paths;
 mod pattern_matcher;
 mod re_export;
