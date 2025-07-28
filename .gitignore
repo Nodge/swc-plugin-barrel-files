@@ -2,6 +2,9 @@ node_modules
 .swc
 target
 tests/fixtures
+perf/fixtures
+perf/output
+perf/.swcrc
 swc_plugin_barrel_files.wasm
 mise.toml
 todo.md
