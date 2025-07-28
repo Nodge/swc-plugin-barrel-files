@@ -1,5 +1,40 @@
 # swc-plugin-barrel-files
 
+## 0.5.0
+
+### Minor Changes
+
+- [#19](https://github.com/Nodge/swc-plugin-barrel-files/pull/19) [`de407fa`](https://github.com/Nodge/swc-plugin-barrel-files/commit/de407fa16685b029c5f0af56ce060c74f40d2913) Thanks [@Nodge](https://github.com/Nodge)! - Add symlinks configuration support for external barrel files
+
+  This feature introduces a new `symlinks` configuration option that enables the plugin to work with external files and directories outside the current working directory. This is particularly useful in monorepo setups or when working with external libraries that need barrel file optimization.
+
+  This feature overcomes SWC plugin limitations that restrict file access to the current working directory, enabling barrel file optimization for shared workspace modules.
+
+  **Configuration Example:**
+
+  ```json
+  {
+    "symlinks": {
+      "../external-lib/index.ts": "./node_modules/external-lib/index.ts",
+      "../shared-workspace": "./symlinks/workspace/src"
+    }
+  }
+  ```
+
+  **How it Works:**
+
+  When the plugin encounters an import from an external path, it:
+  1. Checks if the path matches any symlink mapping
+  2. Resolves it to the internal symlinked path
+  3. Processes the barrel file using the internal path
+  4. Generates optimized direct imports
+
+### Patch Changes
+
+- [#21](https://github.com/Nodge/swc-plugin-barrel-files/pull/21) [`59b55a3`](https://github.com/Nodge/swc-plugin-barrel-files/commit/59b55a3b1ce6697487b6b1cb8b6f50f6496eef3f) Thanks [@Nodge](https://github.com/Nodge)! - Preserve import order when transforming barrel file imports
+
+  This change ensures that when barrel file imports are transformed, the resulting imports maintain the order defined in the barrel file rather than being alphabetically sorted. This provides more predictable and consistent output that respects the original barrel file's export ordering.
+
 ## 0.4.0
 
 ### Minor Changes
