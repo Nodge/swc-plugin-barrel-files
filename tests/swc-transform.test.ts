@@ -903,6 +903,127 @@ describe("SWC Barrel Files Transformation", () => {
         expect(result.stderr).toMatchInlineSnapshot(`""`);
     });
 
+    it("should preseve original import order for rewritten import specifiers", async () => {
+        await file(
+            "src/features/some-1/index.ts",
+            `
+            export { Attach } from "./components/Attach";
+            export { Button } from "./components/Button";
+        `,
+        );
+        await file(
+            "src/features/some-2/index.ts",
+            `
+            export { Button } from "./components/Button";
+            export { Attach } from "./components/Attach";
+        `,
+        );
+
+        let result = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/test1.ts"),
+            code: `
+            import { Attach, Button } from "#features/some-1";
+            console.log(Attach, Button);
+        `,
+            config: defaultConfig,
+        });
+
+        expect(result.code).toMatchInlineSnapshot(`
+          "import { Attach } from "../../features/some-1/components/Attach";
+          import { Button } from "../../features/some-1/components/Button";
+          console.log(Attach, Button);
+          "
+        `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
+
+        result = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/test1.ts"),
+            code: `
+            import { Button, Attach } from "#features/some-1";
+            console.log(Attach, Button);
+        `,
+            config: defaultConfig,
+        });
+
+        expect(result.code).toMatchInlineSnapshot(`
+          "import { Attach } from "../../features/some-1/components/Attach";
+          import { Button } from "../../features/some-1/components/Button";
+          console.log(Attach, Button);
+          "
+        `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
+
+        result = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/test1.ts"),
+            code: `
+            import { Attach, Button } from "#features/some-2";
+            console.log(Attach, Button);
+        `,
+            config: defaultConfig,
+        });
+
+        expect(result.code).toMatchInlineSnapshot(`
+          "import { Button } from "../../features/some-2/components/Button";
+          import { Attach } from "../../features/some-2/components/Attach";
+          console.log(Attach, Button);
+          "
+        `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
+
+        result = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/test1.ts"),
+            code: `
+            import { Button, Attach } from "#features/some-2";
+            console.log(Attach, Button);
+        `,
+            config: defaultConfig,
+        });
+
+        expect(result.code).toMatchInlineSnapshot(`
+          "import { Button } from "../../features/some-2/components/Button";
+          import { Attach } from "../../features/some-2/components/Attach";
+          console.log(Attach, Button);
+          "
+        `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
+    });
+
+    it("should preserve order and group imports from same source file", async () => {
+        await file(
+            "src/features/grouping/index.ts",
+            `
+                export { Button } from "./components/Button";
+                export { Card } from "./components/Card";
+                export { Input, Select } from "./components/Form";
+                export { Modal } from "./components/Modal";
+            `,
+        );
+
+        const result = await transpileWithSwc({
+            filename: path.join(fixturesDir, "src/pages/test/grouping.ts"),
+            code: `
+                import { Input, Button, Modal, Card, Select } from "#features/grouping";
+                console.log(Button, Card, Input, Select, Modal);
+            `,
+            config: defaultConfig,
+        });
+
+        expect(result.code).toMatchInlineSnapshot(`
+          "import { Button } from "../../features/grouping/components/Button";
+          import { Card } from "../../features/grouping/components/Card";
+          import { Input, Select } from "../../features/grouping/components/Form";
+          import { Modal } from "../../features/grouping/components/Modal";
+          console.log(Button, Card, Input, Select, Modal);
+          "
+        `);
+        expect(result.stdout).toMatchInlineSnapshot(`""`);
+        expect(result.stderr).toMatchInlineSnapshot(`""`);
+    });
+
     describe("unsupported_import_mode configuration", () => {
         it("should error on namespace imports by default", async () => {
             await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
@@ -1335,8 +1456,8 @@ describe("SWC Barrel Files Transformation", () => {
             });
 
             expect(result.code).toMatchInlineSnapshot(`
-              "import { fetchUser } from "../features/user/api/user";
-              import { UserProfile } from "../features/user/components/UserProfile";
+              "import { UserProfile } from "../features/user/components/UserProfile";
+              import { fetchUser } from "../features/user/api/user";
               console.log(UserProfile, fetchUser);
               "
             `);
@@ -1528,9 +1649,7 @@ describe("SWC Barrel Files Transformation", () => {
               console.log(Button, helper);
               "
             `);
-            expect(result.stdout).toMatchInlineSnapshot(
-                `""`,
-            );
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
             expect(result.stderr).toMatchInlineSnapshot(`""`);
         });
 
