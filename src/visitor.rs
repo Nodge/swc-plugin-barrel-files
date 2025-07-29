@@ -51,6 +51,10 @@ impl BarrelTransformVisitor {
         // swc/cli pass relative `filepath`
         let source_file_path = path_join(&cwd, &filename);
 
+        // Resolve synlinks and normalize the path back to absolute
+        let source_file_path = path_resolver.resolve_path(&source_file_path);
+        let source_file_path = path_join(&cwd, &source_file_path);
+
         // Cannot process files outside cwd due to WASM restrictions
         if !source_file_path.starts_with(&cwd) {
             if config.debug.unwrap_or_default() {

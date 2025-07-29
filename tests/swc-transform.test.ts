@@ -838,7 +838,7 @@ describe("SWC Barrel Files Transformation", () => {
         });
 
         expect(result.code).toMatchInlineSnapshot(`
-          "import { Button } from "../../features/some/index.ts";
+          "import { Button } from "../../features/some/components/Button";
           console.log(Button);
           "
         `);
@@ -1465,6 +1465,38 @@ describe("SWC Barrel Files Transformation", () => {
             expect(result.stderr).toMatchInlineSnapshot(`""`);
         });
 
+        it("should resolve absolute paths correctly with relative paths in synlink configuration", async () => {
+            await file(
+                "src/features/user/index.ts",
+                'export { UserProfile } from "./components/UserProfile";\nexport { fetchUser } from "./api/user";',
+            );
+
+            const config: PluginConfig = {
+                patterns: [path.join(fixturesDir, "src/features/*/index.ts")],
+                symlinks: {
+                    "../external-nested/src/features/user": path.join(fixturesDir, "src/features/user/index.ts"),
+                },
+            };
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/user.ts"),
+                code: `
+                    import { UserProfile, fetchUser } from "${path.join(process.cwd(), "../external-nested/src/features/user")}";
+                    console.log(UserProfile, fetchUser);
+                `,
+                config,
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { UserProfile } from "../features/user/components/UserProfile";
+              import { fetchUser } from "../features/user/api/user";
+              console.log(UserProfile, fetchUser);
+              "
+            `);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
         it("should handle absolute external paths with symlinks", async () => {
             await file("src/components/index.ts", 'export { GlobalComponent } from "/absolute/path/to/component";');
 
@@ -1700,6 +1732,34 @@ describe("SWC Barrel Files Transformation", () => {
                 filename: path.join(fixturesDir, "src/pages/trailing.ts"),
                 code: `
                     import { login } from "../../../../../../external-lib/features/auth/index.ts";
+                    console.log(login);
+                `,
+                config,
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { login } from "../features/auth/api/login";
+              console.log(login);
+              "
+            `);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
+        it("should handle source file accessed through symlinked path", async () => {
+            await file("src/features/auth/index.ts", 'export { login } from "./api/login";');
+
+            const config: PluginConfig = {
+                patterns: [path.join(fixturesDir, "src/features/*/index.ts")],
+                symlinks: {
+                    "../external-src/": "tests/fixtures/src/",
+                },
+            };
+
+            const result = await transpileWithSwc({
+                filename: path.join(process.cwd(), "../external-src/pages/symlinked-source.ts"),
+                code: `
+                    import { login } from "../features/auth/index.ts";
                     console.log(login);
                 `,
                 config,
