@@ -1,5 +1,13 @@
 # swc-plugin-barrel-files
 
+## 0.5.1
+
+### Patch Changes
+
+- [#23](https://github.com/Nodge/swc-plugin-barrel-files/pull/23) [`5d05281`](https://github.com/Nodge/swc-plugin-barrel-files/commit/5d05281a70ac6dd69d95e5b8519e64d45bc805ec) Thanks [@Nodge](https://github.com/Nodge)! - Fix symlink path resolution to handle both absolute and relative paths correctly
+
+  This change improves the PathResolver to properly normalize symlink configurations by converting absolute paths to relative paths when needed, and ensures that both absolute and relative input paths are handled consistently during symlink resolution.
+
 ## 0.5.0
 
 ### Minor Changes
