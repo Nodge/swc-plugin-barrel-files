@@ -300,7 +300,6 @@ mod tests {
                     span: DUMMY_SP,
                     sym: "Button".into(),
                     optional: false,
-                    ctxt: Default::default(),
                 }),
                 exported: None,
                 is_type_only: false,
@@ -336,7 +335,6 @@ mod tests {
                     span: DUMMY_SP,
                     sym: "Button".into(),
                     optional: false,
-                    ctxt: Default::default(),
                 },
                 imported: None,
                 is_type_only: false,
@@ -348,7 +346,6 @@ mod tests {
             }),
             type_only: false,
             with: None,
-            phase: Default::default(),
         });
 
         module.body.push(ModuleItem::ModuleDecl(import_decl));
@@ -430,13 +427,11 @@ mod tests {
                         body: Some(BlockStmt {
                             span: DUMMY_SP,
                             stmts: vec![],
-                            ctxt: Default::default(),
                         }),
                         is_generator: false,
                         is_async: false,
                         type_params: None,
                         return_type: None,
-                        ctxt: Default::default(),
                     }),
                 }),
             });
@@ -470,7 +465,6 @@ mod tests {
                     span: DUMMY_SP,
                     sym: "Button".into(),
                     optional: false,
-                    ctxt: Default::default(),
                 }),
                 exported: None,
                 is_type_only: false,
@@ -513,13 +507,11 @@ mod tests {
                     span: DUMMY_SP,
                     sym: "Button".into(),
                     optional: false,
-                    ctxt: Default::default(),
                 }),
                 exported: Some(ModuleExportName::Ident(Ident {
                     span: DUMMY_SP,
                     sym: "CustomButton".into(),
                     optional: false,
-                    ctxt: Default::default(),
                 })),
                 is_type_only: false,
             })],
@@ -561,7 +553,6 @@ mod tests {
                         span: DUMMY_SP,
                         sym: "Button".into(),
                         optional: false,
-                        ctxt: Default::default(),
                     },
                 },
             )],
