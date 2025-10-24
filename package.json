@@ -35,14 +35,14 @@
     },
     "devDependencies": {
         "@changesets/changelog-github": "^0.5.1",
-        "@changesets/cli": "^2.29.5",
+        "@changesets/cli": "^2.29.7",
         "@swc/cli": "0.7.8",
-        "@swc/core": "1.12.11",
-        "@swc/plugin-noop": "9.0.0",
-        "@types/node": "22.13.11",
+        "@swc/core": "1.13.20",
+        "@swc/plugin-noop": "9.1.0",
+        "@types/node": "22",
         "prettier": "3.6.2",
-        "tsx": "4.20.3",
-        "typescript": "5.8.3",
+        "tsx": "4.20.6",
+        "typescript": "5.9.3",
         "vitest": "3.2.4"
     },
     "peerDependencies": {
