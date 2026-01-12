@@ -112,13 +112,13 @@ impl BarrelTransformVisitor {
     }
 
     fn process_import(&self, import_decl: &ImportDecl) -> Result<Option<Vec<ImportDecl>>, String> {
-        let import_path = import_decl.src.value.as_str();
+        let import_path = import_decl.src.value.to_string_lossy().to_string();
 
-        let barrel_file = if !import_path.starts_with('.') && !Path::new(import_path).is_absolute()
+        let barrel_file = if !import_path.starts_with('.') && !Path::new(&import_path).is_absolute()
         {
-            self.resolve_aliased_import(import_path)?
+            self.resolve_aliased_import(&import_path)?
         } else {
-            self.resolve_local_import(import_path)?
+            self.resolve_local_import(&import_path)?
         };
 
         if let Some(barrel_file) = barrel_file {
@@ -203,7 +203,7 @@ impl BarrelTransformVisitor {
                         };
                         self.log(format!(
                             "        import {{ {} }} from \"{}\"",
-                            specifier_name, source
+                            specifier_name, source.to_string_lossy()
                         ));
                     }
                 }

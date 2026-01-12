@@ -37,7 +37,7 @@
         "@changesets/changelog-github": "^0.5.1",
         "@changesets/cli": "^2.29.7",
         "@swc/cli": "0.7.8",
-        "@swc/core": "1.13.20",
+        "@swc/core": "1.15.8",
         "@swc/plugin-noop": "9.1.0",
         "@types/node": "22",
         "prettier": "3.6.2",

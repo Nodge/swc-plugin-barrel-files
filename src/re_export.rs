@@ -197,20 +197,20 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                     ExportSpecifier::Named(named) => {
                         let exported_name = match &named.exported {
                             Some(ModuleExportName::Ident(ident)) => ident.sym.to_string(),
-                            Some(ModuleExportName::Str(str)) => str.value.to_string(),
+                            Some(ModuleExportName::Str(str)) => str.value.to_string_lossy().to_string(),
                             None => match &named.orig {
                                 ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                                ModuleExportName::Str(str) => str.value.to_string(),
+                                ModuleExportName::Str(str) => str.value.to_string_lossy().to_string(),
                             },
                         };
 
                         let original_name = match &named.orig {
                             ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                            ModuleExportName::Str(str) => str.value.to_string(),
+                            ModuleExportName::Str(str) => str.value.to_string_lossy().to_string(),
                         };
 
                         if let Some(src) = &export.src {
-                            let source_path = src.value.to_string();
+                            let source_path = src.value.to_string_lossy().to_string();
 
                             re_exports.push(ReExport {
                                 exported_name,
@@ -227,7 +227,7 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                     }
                     ExportSpecifier::Default(default) => {
                         if let Some(src) = &export.src {
-                            let source_path = src.value.to_string();
+                            let source_path = src.value.to_string_lossy().to_string();
 
                             re_exports.push(ReExport {
                                 exported_name: default.exported.sym.to_string(),
@@ -244,11 +244,11 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                     ExportSpecifier::Namespace(ns) => {
                         let exported_name = match &ns.name {
                             ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                            ModuleExportName::Str(str) => str.value.to_string(),
+                            ModuleExportName::Str(str) => str.value.to_string_lossy().to_string(),
                         };
 
                         if let Some(src) = &export.src {
-                            let source_path = src.value.to_string();
+                            let source_path = src.value.to_string_lossy();
 
                             return Err(BarrelError::NamespaceExport(format!(
                                 "export * as {} from '{}'",
