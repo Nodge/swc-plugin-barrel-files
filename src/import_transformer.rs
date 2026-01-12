@@ -86,7 +86,7 @@ fn extract_imported_name(named: &ImportNamedSpecifier) -> String {
         .as_ref()
         .map(|name| match name {
             ModuleExportName::Ident(ident) => ident.sym.to_string(),
-            ModuleExportName::Str(str) => str.value.to_string(),
+            ModuleExportName::Str(str) => str.value.to_string_lossy().to_string(),
         })
         .unwrap_or_else(|| named.local.sym.to_string())
 }
@@ -135,7 +135,7 @@ pub fn transform_import(
                         );
                     }
                     UnsupportedImportMode::Warn => {
-                        eprintln!("Warning: Namespace imports are not supported for barrel file optimization. Import from {} will be skipped.", import_decl.src.value);
+                        eprintln!("Warning: Namespace imports are not supported for barrel file optimization. Import from {} will be skipped.", import_decl.src.value.to_string_lossy());
                     }
                     UnsupportedImportMode::Off => {}
                 },
