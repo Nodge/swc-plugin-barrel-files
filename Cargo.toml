@@ -20,4 +20,4 @@ swc_core = { version = "82.2.0", features = [
     "ecma_parser",
 ] }
 pathdiff = "0.2.3"
-indexmap = "2.10.0"
+indexmap = "2.14.2"

@@ -41,10 +41,11 @@
         "@swc/core": "1.16.20",
         "@swc/plugin-noop": "17.0.0",
         "@types/node": "22",
-        "prettier": "3.6.2",
-        "tsx": "4.20.6",
-        "typescript": "5.9.3",
-        "vitest": "3.2.4"
+        "prettier": "3.9.10",
+        "tsx": "4.23.15",
+        "typescript": "7.0.2",
+        "vite": "8.3.5",
+        "vitest": "5.0.5"
     },
     "peerDependencies": {
         "@rspack/core": ">=1.4.0",
