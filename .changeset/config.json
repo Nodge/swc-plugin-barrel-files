@@ -1,11 +1,12 @@
 {
-    "$schema": "https://unpkg.com/@changesets/config@3.0.2/schema.json",
+    "$schema": "https://unpkg.com/@changesets/config@4.0.1/schema.json",
     "changelog": ["@changesets/changelog-github", { "repo": "nodge/swc-plugin-barrel-files" }],
     "commit": false,
     "fixed": [],
     "linked": [],
     "access": "public",
     "baseBranch": "main",
+    "changedFilePatterns": ["src/**", "Cargo.toml", "types.d.ts", "package.json"],
     "updateInternalDependencies": "patch",
     "ignore": []
 }

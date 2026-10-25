@@ -10,6 +10,7 @@
         "README.md",
         "LICENSE"
     ],
+    "packageManager": "pnpm@11.10.0",
     "scripts": {
         "build": "cargo build-wasip1 --release",
         "postbuild": "cp target/wasm32-wasip1/release/swc_plugin_barrel_files.wasm .",
@@ -17,7 +18,7 @@
         "test:watch": "vitest",
         "perf": "tsx perf/run.ts",
         "generate-perf-fixtures": "tsx perf/generate-fixtures.ts",
-        "changeset": "changeset",
+        "changeset": "changeset add",
         "ci:version": "changeset version",
         "ci:release": "pnpm build && changeset publish"
     },
@@ -28,17 +29,17 @@
     ],
     "author": "Maksim Zemskov <nodge@yandex.ru>",
     "license": "MIT",
-    "homepage": "https://github.com/nodge/swc-plugin-barrel-files",
+    "homepage": "https://github.com/Nodge/swc-plugin-barrel-files",
     "repository": {
         "type": "git",
-        "url": "https://github.com/nodge/swc-plugin-barrel-files.git"
+        "url": "https://github.com/Nodge/swc-plugin-barrel-files.git"
     },
     "devDependencies": {
-        "@changesets/changelog-github": "^0.5.1",
-        "@changesets/cli": "^2.29.7",
-        "@swc/cli": "0.7.8",
-        "@swc/core": "1.13.20",
-        "@swc/plugin-noop": "9.1.0",
+        "@changesets/changelog-github": "^1.0.1",
+        "@changesets/cli": "^3.0.3",
+        "@swc/cli": "0.8.1",
+        "@swc/core": "1.16.20",
+        "@swc/plugin-noop": "17.0.0",
         "@types/node": "22",
         "prettier": "3.6.2",
         "tsx": "4.20.6",

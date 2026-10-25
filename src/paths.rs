@@ -2,14 +2,13 @@
 //!
 //! This module provides functionality for path resolution and manipulation.
 
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 /// Cache for file existence checks
-static FILE_EXISTS_CACHE: Lazy<Mutex<HashMap<String, bool>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static FILE_EXISTS_CACHE: LazyLock<Mutex<HashMap<String, bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Fast file existence check with caching
 ///
