@@ -118,6 +118,8 @@ function cleanupOutput(output: string) {
     return output
         .replaceAll(process.cwd(), "/cwd")
         .replace(/(\s)column: \d+/, "$1column: ?")
+        // Newer Rust prints the thread id in panic messages
+        .replace(/thread '<unnamed>' \(\d+\) panicked/g, "thread '<unnamed>' panicked")
         // Drop the host's compatibility hint after a plugin panic: it changes with every swc release
         .replace(/(failed to invoke plugin on '[^']*'):[\s\S]*$/, "$1")
         .trim();
