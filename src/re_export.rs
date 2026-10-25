@@ -2,7 +2,6 @@
 //!
 //! This module provides functionality for analyzing barrel files and extracting re-export information.
 
-use std::path::Path;
 use swc_core::ecma::ast::{
     Decl, ExportSpecifier, Module, ModuleDecl, ModuleExportName, ModuleItem,
 };
@@ -176,18 +175,14 @@ fn validate_barrel_file(ast: &Module) -> Result<(), BarrelError> {
 /// # Arguments
 ///
 /// * `ast` - The AST of the barrel file
-/// * `file_path` - The path of the barrel file
 ///
 /// # Returns
 ///
 /// A list of re-exports if the file is a valid barrel file, `Err` otherwise
-pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport>, BarrelError> {
+pub fn analyze_barrel_file(ast: &Module) -> Result<Vec<ReExport>, BarrelError> {
     validate_barrel_file(ast)?;
 
     let mut re_exports = Vec::new();
-    let _barrel_dir = Path::new(file_path)
-        .parent()
-        .unwrap_or_else(|| Path::new(""));
 
     for item in &ast.body {
         if let ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(export)) = item {
@@ -197,20 +192,22 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                     ExportSpecifier::Named(named) => {
                         let exported_name = match &named.exported {
                             Some(ModuleExportName::Ident(ident)) => ident.sym.to_string(),
-                            Some(ModuleExportName::Str(str)) => str.value.to_string(),
+                            Some(ModuleExportName::Str(str)) => {
+                                str.value.to_atom_lossy().to_string()
+                            }
                             None => match &named.orig {
                                 ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                                ModuleExportName::Str(str) => str.value.to_string(),
+                                ModuleExportName::Str(str) => str.value.to_atom_lossy().to_string(),
                             },
                         };
 
                         let original_name = match &named.orig {
                             ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                            ModuleExportName::Str(str) => str.value.to_string(),
+                            ModuleExportName::Str(str) => str.value.to_atom_lossy().to_string(),
                         };
 
                         if let Some(src) = &export.src {
-                            let source_path = src.value.to_string();
+                            let source_path = src.value.to_atom_lossy().to_string();
 
                             re_exports.push(ReExport {
                                 exported_name,
@@ -227,7 +224,7 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                     }
                     ExportSpecifier::Default(default) => {
                         if let Some(src) = &export.src {
-                            let source_path = src.value.to_string();
+                            let source_path = src.value.to_atom_lossy().to_string();
 
                             re_exports.push(ReExport {
                                 exported_name: default.exported.sym.to_string(),
@@ -244,11 +241,11 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                     ExportSpecifier::Namespace(ns) => {
                         let exported_name = match &ns.name {
                             ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                            ModuleExportName::Str(str) => str.value.to_string(),
+                            ModuleExportName::Str(str) => str.value.to_atom_lossy().to_string(),
                         };
 
                         if let Some(src) = &export.src {
-                            let source_path = src.value.to_string();
+                            let source_path = src.value.to_atom_lossy().to_string();
 
                             return Err(BarrelError::NamespaceExport(format!(
                                 "export * as {} from '{}'",
@@ -263,10 +260,6 @@ pub fn analyze_barrel_file(ast: &Module, file_path: &str) -> Result<Vec<ReExport
                     }
                 }
             }
-        } else if let ModuleItem::ModuleDecl(ModuleDecl::ExportAll(_)) = item {
-            return Err(BarrelError::WildcardExport(
-                "Wildcard exports are not allowed in barrel files".to_string(),
-            ));
         }
     }
 
@@ -278,7 +271,7 @@ mod tests {
     use super::*;
     use swc_core::common::DUMMY_SP;
     use swc_core::ecma::ast::{
-        BlockStmt, DefaultDecl, EmptyStmt, ExportAll, ExportNamedSpecifier, FnExpr, Ident,
+        DefaultDecl, EmptyStmt, ExportAll, ExportNamedSpecifier, FnExpr, FunctionBody, Ident,
         ImportDecl, ImportNamedSpecifier, ImportSpecifier, NamedExport, Stmt, Str,
     };
 
@@ -424,13 +417,13 @@ mod tests {
                 decl: DefaultDecl::Fn(FnExpr {
                     ident: None,
                     function: Box::new(swc_core::ecma::ast::Function {
+                        this_param: None,
                         params: vec![],
                         decorators: vec![],
                         span: DUMMY_SP,
-                        body: Some(BlockStmt {
+                        body: Some(FunctionBody {
                             span: DUMMY_SP,
                             stmts: vec![],
-                            ctxt: Default::default(),
                         }),
                         is_generator: false,
                         is_async: false,
@@ -487,7 +480,7 @@ mod tests {
         module.body.push(ModuleItem::ModuleDecl(named_export));
 
         // Analyze the barrel file
-        let result = analyze_barrel_file(&module, "/path/to/barrel/index.ts");
+        let result = analyze_barrel_file(&module);
         assert!(result.is_ok());
 
         let re_exports = result.unwrap();
@@ -535,7 +528,7 @@ mod tests {
         module.body.push(ModuleItem::ModuleDecl(renamed_export));
 
         // Analyze the barrel file
-        let result = analyze_barrel_file(&module, "/path/to/barrel/index.ts");
+        let result = analyze_barrel_file(&module);
         assert!(result.is_ok());
 
         let re_exports = result.unwrap();
@@ -577,7 +570,7 @@ mod tests {
         module.body.push(ModuleItem::ModuleDecl(default_export));
 
         // Analyze the barrel file
-        let result = analyze_barrel_file(&module, "/path/to/barrel/index.ts");
+        let result = analyze_barrel_file(&module);
         assert!(result.is_ok());
 
         let re_exports = result.unwrap();

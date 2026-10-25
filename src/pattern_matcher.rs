@@ -3,8 +3,6 @@
 //! This module provides functionality for matching import paths against patterns with wildcards,
 //! extracting components from matched paths, and applying those components to path templates.
 
-use std::collections::HashMap;
-
 /// Pre-compiled pattern for optimized matching
 #[derive(Clone)]
 pub struct CompiledPattern {
@@ -44,9 +42,7 @@ impl CompiledPattern {
             if i == 0 {
                 // First part - must match at the beginning
                 if !part.is_empty() {
-                    if path_pos + part.len() > path_len
-                        || &path[path_pos..path_pos + part.len()] != part
-                    {
+                    if !path.starts_with(part.as_str()) {
                         return false;
                     }
                     path_pos += part.len();
@@ -54,7 +50,7 @@ impl CompiledPattern {
             } else if i == self.parts.len() - 1 {
                 // Last part - must match at the end
                 if !part.is_empty() {
-                    if path_len < part.len() || &path[path_len - part.len()..] != part {
+                    if !path.ends_with(part.as_str()) {
                         return false;
                     }
                     // Make sure there's a valid wildcard match before this part
@@ -99,8 +95,8 @@ impl CompiledPattern {
     }
 
     /// Extracts components from a path using this pattern
-    pub fn extract_components(&self, path: &str) -> HashMap<String, String> {
-        let mut components = HashMap::new();
+    pub fn extract_components(&self, path: &str) -> Vec<String> {
+        let mut components = Vec::new();
 
         if !self.matches(path) {
             return components;
@@ -112,8 +108,6 @@ impl CompiledPattern {
 
         let mut path_pos = 0;
         let path_len = path.len();
-        let mut wildcard_index = 0;
-
         for (i, part) in self.parts.iter().enumerate() {
             if i == 0 {
                 // Skip the first literal part
@@ -126,15 +120,13 @@ impl CompiledPattern {
                     let end_pos = path_len - part.len();
                     if path_pos < end_pos {
                         let wildcard_value = &path[path_pos..end_pos];
-                        components
-                            .insert(format!("p{}", wildcard_index), wildcard_value.to_string());
+                        components.push(wildcard_value.to_string());
                     }
                 } else {
                     // Pattern ends with wildcard
                     if path_pos < path_len {
                         let wildcard_value = &path[path_pos..];
-                        components
-                            .insert(format!("p{}", wildcard_index), wildcard_value.to_string());
+                        components.push(wildcard_value.to_string());
                     }
                 }
                 break;
@@ -143,16 +135,11 @@ impl CompiledPattern {
                 if !part.is_empty() {
                     if let Some(next_pos) = path[path_pos..].find(part) {
                         let wildcard_value = &path[path_pos..path_pos + next_pos];
-                        components
-                            .insert(format!("p{}", wildcard_index), wildcard_value.to_string());
-                        wildcard_index += 1;
+                        components.push(wildcard_value.to_string());
                         path_pos += next_pos + part.len();
                     } else {
                         break;
                     }
-                } else {
-                    // Empty part, increment wildcard index
-                    wildcard_index += 1;
                 }
             }
         }
@@ -171,21 +158,12 @@ impl CompiledPattern {
 /// # Returns
 ///
 /// The template with wildcards replaced by the corresponding components
-pub fn apply_components_to_template(
-    template: &str,
-    components: &HashMap<String, String>,
-) -> String {
-    let mut result = template.to_string();
-    let mut values: Vec<_> = components.iter().collect();
-
-    // Sort by key to ensure consistent ordering (p0, p1, p2, etc.)
-    values.sort_by(|a, b| a.0.cmp(b.0));
-
-    for (_, value) in values {
-        result = result.replacen("*", value, 1);
-    }
-
-    result
+pub fn apply_components_to_template(template: &str, components: &[String]) -> String {
+    components
+        .iter()
+        .fold(template.to_string(), |result, value| {
+            result.replacen('*', value, 1)
+        })
 }
 
 #[cfg(test)]
@@ -209,8 +187,19 @@ mod tests {
 
         // Test component extraction
         let components = pattern2.extract_components("#features/auth/components/login");
-        assert_eq!(components.get("p0"), Some(&"auth".to_string()));
-        assert_eq!(components.get("p1"), Some(&"login".to_string()));
+        assert_eq!(components.first(), Some(&"auth".to_string()));
+        assert_eq!(components.get(1), Some(&"login".to_string()));
+    }
+
+    #[test]
+    fn test_non_ascii_paths() {
+        let pattern = CompiledPattern::new("/cwd/src/*ab").unwrap();
+        assert!(!pattern.matches("/cwd/src/xéb"));
+        assert!(pattern.matches("/cwd/src/éab"));
+
+        let pattern = CompiledPattern::new("/cwd/é*/index.ts").unwrap();
+        assert!(!pattern.matches("/cwd/e"));
+        assert!(pattern.matches("/cwd/éx/index.ts"));
     }
 
     #[test]
@@ -263,18 +252,18 @@ mod tests {
         // Single wildcard
         let pattern1 = CompiledPattern::new("#entities/*").unwrap();
         let components = pattern1.extract_components("#entities/user");
-        assert_eq!(components.get("p0"), Some(&"user".to_string()));
+        assert_eq!(components.first(), Some(&"user".to_string()));
 
         // Wildcard in the middle
         let pattern2 = CompiledPattern::new("#entities/*/testing").unwrap();
         let components = pattern2.extract_components("#entities/user/testing");
-        assert_eq!(components.get("p0"), Some(&"user".to_string()));
+        assert_eq!(components.first(), Some(&"user".to_string()));
 
         // Multiple wildcards
         let pattern3 = CompiledPattern::new("#features/*/components/*").unwrap();
         let components = pattern3.extract_components("#features/auth/components/login");
-        assert_eq!(components.get("p0"), Some(&"auth".to_string()));
-        assert_eq!(components.get("p1"), Some(&"login".to_string()));
+        assert_eq!(components.first(), Some(&"auth".to_string()));
+        assert_eq!(components.get(1), Some(&"login".to_string()));
 
         // No wildcards
         let pattern4 = CompiledPattern::new("@direct-frontend/stdlib").unwrap();
@@ -284,33 +273,25 @@ mod tests {
         // Special characters
         let pattern5 = CompiledPattern::new("@direct-frontend/components.ui/*").unwrap();
         let components = pattern5.extract_components("@direct-frontend/components.ui/Button");
-        assert_eq!(components.get("p0"), Some(&"Button".to_string()));
+        assert_eq!(components.first(), Some(&"Button".to_string()));
     }
 
     #[test]
     fn test_apply_components_to_template() {
         // Single wildcard
-        let mut components = HashMap::new();
-        components.insert("p0".to_string(), "user".to_string());
-
+        let components = vec!["user".to_string()];
         let result = apply_components_to_template("./src/entities/*/index.ts", &components);
         assert_eq!(result, "./src/entities/user/index.ts");
 
-        // Multiple wildcards
-        let mut components = HashMap::new();
-        components.insert("p0".to_string(), "auth".to_string());
-        components.insert("p1".to_string(), "login".to_string());
-
+        // Multiple wildcards are filled in capture order
+        let components = vec!["auth".to_string(), "login".to_string()];
         let result =
             apply_components_to_template("./src/features/*/components/*/index.ts", &components);
         assert_eq!(result, "./src/features/auth/components/login/index.ts");
 
-        // Ensure correct ordering of replacements
-        let mut components = HashMap::new();
-        components.insert("p1".to_string(), "second".to_string());
-        components.insert("p0".to_string(), "first".to_string());
-
-        let result = apply_components_to_template("*/*/template", &components);
-        assert_eq!(result, "first/second/template");
+        // More than ten wildcards keep their order
+        let components: Vec<String> = (0..12).map(|i| i.to_string()).collect();
+        let result = apply_components_to_template(&"*/".repeat(12), &components);
+        assert_eq!(result, "0/1/2/3/4/5/6/7/8/9/10/11/");
     }
 }

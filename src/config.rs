@@ -1,5 +1,5 @@
+use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
-use std::collections::HashMap;
 use std::fmt;
 
 /// Mode for handling unsupported import patterns
@@ -91,8 +91,9 @@ pub struct Config {
     /// Rules for resolving import aliases (optional)
     pub aliases: Option<Vec<Alias>>,
 
-    /// Symlink mappings from external paths to internal paths (optional)
-    pub symlinks: Option<HashMap<String, String>>,
+    /// Removed `symlinks` option: present only to reject configs that still set it
+    #[serde(default, rename = "symlinks", deserialize_with = "reject_symlinks")]
+    _symlinks: (),
 
     /// Enables debug logging to stdout
     pub debug: Option<bool>,
@@ -104,6 +105,14 @@ pub struct Config {
     /// How to handle invalid barrel files (files with unsupported constructs)
     #[serde(default)]
     pub invalid_barrel_mode: InvalidBarrelMode,
+}
+
+/// The SWC Wasm sandbox does not follow symlinks, so path remapping onto them cannot work
+fn reject_symlinks<'de, D: Deserializer<'de>>(_: D) -> Result<(), D::Error> {
+    Err(D::Error::custom(
+        "The `symlinks` option has been removed: SWC plugins cannot read files through symlinks. \
+         Run SWC from the monorepo root and use real paths in `patterns` and `aliases`",
+    ))
 }
 
 /// Rule for resolving import aliases
@@ -227,6 +236,19 @@ mod tests {
             assert_eq!(config.unsupported_import_mode, expected_unsupported);
             assert_eq!(config.invalid_barrel_mode, expected_invalid);
         }
+    }
+
+    #[test]
+    fn test_symlinks_option_rejected() {
+        let config_json = r#"{
+            "patterns": ["src/*/index.ts"],
+            "symlinks": { "../lib": "node_modules/lib" }
+        }"#;
+
+        let error = serde_json::from_str::<Config>(config_json).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("The `symlinks` option has been removed"));
     }
 
     #[test]

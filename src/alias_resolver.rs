@@ -4,6 +4,8 @@
 //! and finding corresponding barrel files. It handles pattern matching and path resolution
 //! to support dynamic imports and re-exports in the barrel files system.
 
+use std::path::Path;
+
 use crate::config::Alias;
 use crate::path_resolver::PathResolver;
 use crate::paths::{file_exists, path_join};
@@ -44,7 +46,7 @@ impl AliasResolver {
                 Some(context) => context.iter().any(|ctx| {
                     let joined_path = path_join(cwd, ctx);
                     if let Ok(virtual_path) = path_resolver.to_virtual_path(&joined_path) {
-                        return source_file.starts_with(&virtual_path);
+                        return Path::new(source_file).starts_with(&virtual_path);
                     }
                     false
                 }),
@@ -95,7 +97,6 @@ impl AliasResolver {
 
             for path_template in compiled_alias.alias.paths.iter() {
                 let resolved_path = apply_components_to_template(path_template, &components);
-                let resolved_path = self.path_resolver.resolve_path(&resolved_path);
                 let path = self.path_resolver.to_virtual_path(&resolved_path)?;
 
                 if file_exists(&path) {
@@ -153,7 +154,7 @@ mod tests {
         let config = Some(vec![rule2.clone(), rule1.clone()]);
         let cwd = "/".to_string();
         let source_file = "/some/file".to_string();
-        let path_resolver = PathResolver::new(&None, &cwd);
+        let path_resolver = PathResolver::new(&cwd);
         let visitor = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // The more specific rule should be first in sorted_rules
@@ -214,7 +215,7 @@ mod tests {
         // Test with source file in /cwd/src
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/src/components/Button.tsx".to_string();
-        let path_resolver = PathResolver::new(&None, &cwd);
+        let path_resolver = PathResolver::new(&cwd);
         let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that aliases with no context or matching context are included
@@ -265,7 +266,7 @@ mod tests {
         // Test with source file in /cwd/other
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/other/components/Button.tsx".to_string();
-        let path_resolver = PathResolver::new(&None, &cwd);
+        let path_resolver = PathResolver::new(&cwd);
         let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that aliases with no context or matching context are included
@@ -315,7 +316,7 @@ mod tests {
         // Test with source file in /cwd/tests which doesn't match any context
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/tests/components/Button.test.tsx".to_string();
-        let path_resolver = PathResolver::new(&None, &cwd);
+        let path_resolver = PathResolver::new(&cwd);
         let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that only aliases with no context are included
@@ -340,7 +341,7 @@ mod tests {
         let config = Some(vec![]);
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/src/components/Button.tsx".to_string();
-        let path_resolver = PathResolver::new(&None, &cwd);
+        let path_resolver = PathResolver::new(&cwd);
         let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that the aliases list is empty
@@ -357,7 +358,7 @@ mod tests {
         let config = None;
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/src/components/Button.tsx".to_string();
-        let path_resolver = PathResolver::new(&None, &cwd);
+        let path_resolver = PathResolver::new(&cwd);
         let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that the aliases list is empty
@@ -387,7 +388,7 @@ mod tests {
         // Test with source file that matches multiple contexts
         let cwd = "/cwd".to_string();
         let source_file = "/cwd/src/components/Button.tsx".to_string();
-        let path_resolver = PathResolver::new(&None, &cwd);
+        let path_resolver = PathResolver::new(&cwd);
         let resolver = AliasResolver::new(&config, &path_resolver, &cwd, &source_file).unwrap();
 
         // Verify that the alias is added only once

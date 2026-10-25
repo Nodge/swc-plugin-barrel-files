@@ -1,6 +1,7 @@
 import process from "node:process";
 import path from "node:path";
 import fs from "node:fs/promises";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { describe, it, expect, afterEach } from "vitest";
 
@@ -13,7 +14,6 @@ interface PluginConfig {
         paths: string[];
         context?: string[];
     }>;
-    symlinks?: Record<string, string>;
     debug?: boolean;
     unsupported_import_mode?: "error" | "warn" | "off";
     invalid_barrel_mode?: "error" | "warn" | "off";
@@ -100,21 +100,12 @@ run().catch(error => {
         });
 
         child.on("close", (code) => {
-            if (code !== 0) {
-                resolve({
-                    exitCode: code ?? 0,
-                    code: transformResult,
-                    stdout: cleanupOutput(stdout.replace(/__SWC_RESULT_START__.*?__SWC_RESULT_END__/s, "")),
-                    stderr: cleanupOutput(stderr),
-                });
-            } else {
-                resolve({
-                    exitCode: code ?? 0,
-                    code: transformResult,
-                    stdout: cleanupOutput(stdout.replace(/__SWC_RESULT_START__.*?__SWC_RESULT_END__/s, "")),
-                    stderr: cleanupOutput(stderr),
-                });
-            }
+            resolve({
+                exitCode: code ?? 0,
+                code: transformResult,
+                stdout: cleanupOutput(stdout.replace(/__SWC_RESULT_START__.*?__SWC_RESULT_END__/s, "")),
+                stderr: cleanupOutput(stderr),
+            });
         });
 
         child.on("error", (error) => {
@@ -127,6 +118,8 @@ function cleanupOutput(output: string) {
     return output
         .replaceAll(process.cwd(), "/cwd")
         .replace(/(\s)column: \d+/, "$1column: ?")
+        // Drop the host's compatibility hint after a plugin panic: it changes with every swc release
+        .replace(/(failed to invoke plugin on '[^']*'):[\s\S]*$/, "$1")
         .trim();
 }
 
@@ -134,6 +127,12 @@ async function file(filename: string, content: string) {
     const target = path.join(fixturesDir, filename);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, content);
+}
+
+async function symlink(filename: string, target: string) {
+    const link = path.join(fixturesDir, filename);
+    await fs.mkdir(path.dirname(link), { recursive: true });
+    await fs.symlink(target, link);
 }
 
 describe("SWC Barrel Files Transformation", () => {
@@ -1368,275 +1367,275 @@ describe("SWC Barrel Files Transformation", () => {
         });
     });
 
-    describe("symlinks configuration", () => {
-        it("should transform imports from external paths using symlinks", async () => {
-            await file("src/ui/index.ts", 'export { Button } from "./Button";\nexport { Input } from "./Input";');
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/ui/index.ts")],
-                symlinks: {
-                    "/var/external-lib/src/components": path.join(fixturesDir, "src/ui/index.ts"),
-                },
-            };
+    describe("import bindings", () => {
+        it("should keep every binding when the same export is imported twice", async () => {
+            await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
 
             const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/test.ts"),
+                filename: path.join(fixturesDir, "src/pages/test/duplicate.ts"),
                 code: `
-                    import { Button, Input } from "/var/external-lib/src/components";
-                    console.log(Button, Input);
+                    import { Button, Button as OtherButton } from "#features/f1";
+                    console.log(Button, OtherButton);
                 `,
-                config,
+                config: defaultConfig,
             });
 
             expect(result.code).toMatchInlineSnapshot(`
-              "import { Button } from "../ui/Button";
-              import { Input } from "../ui/Input";
-              console.log(Button, Input);
+              "import { Button, Button as OtherButton } from "../../features/f1/components/Button";
+              console.log(Button, OtherButton);
               "
             `);
-            expect(result.stdout).toMatchInlineSnapshot(`""`);
             expect(result.stderr).toMatchInlineSnapshot(`""`);
         });
 
-        it("should handle symlinks with aliases for external imports", async () => {
-            await file("src/ui/index.ts", 'export { Button } from "./Button";\nexport { Input } from "./Input";');
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/ui/index.ts")],
-                aliases: [
-                    {
-                        pattern: "#external/*",
-                        paths: ["/var/external-lib/src/*/index.ts"],
-                    },
-                ],
-                symlinks: {
-                    "/var/external-lib": fixturesDir,
-                },
-            };
+        it("should report a default import when the barrel has no default export", async () => {
+            await file("src/features/f1/index.ts", 'export { default as Button } from "./components/Button";');
 
             const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/login.ts"),
+                filename: path.join(fixturesDir, "src/pages/test/default.ts"),
                 code: `
-                    import { Button, Input } from "#external/ui";
-                    console.log(Button, Input);
+                    import Default, { Button } from "#features/f1";
+                    console.log(Default, Button);
                 `,
-                config,
+                config: defaultConfig,
             });
 
-            expect(result.code).toMatchInlineSnapshot(`
-              "import { Button } from "../ui/Button";
-              import { Input } from "../ui/Input";
-              console.log(Button, Input);
-              "
+            expect(result.code).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`
+              "x Error processing barrel import: E_UNRESOLVED_EXPORTS: The following exports were not found in the barrel file /cwd/tests/fixtures/src/features/f1/index.ts: default
+                 ,-[/cwd/tests/fixtures/src/pages/test/default.ts:2:1]
+               1 | 
+               2 |                     import Default, { Button } from "#features/f1";
+                 :                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               3 |                     console.log(Default, Button);
+               4 |                 
+                 \`----"
             `);
-            expect(result.stdout).toMatchInlineSnapshot(`""`);
-            expect(result.stderr).toMatchInlineSnapshot(`""`);
         });
 
-        it("should resolve relative paths correctly in symlinked external imports", async () => {
-            await file(
-                "src/features/user/index.ts",
-                'export { UserProfile } from "./components/UserProfile";\nexport { fetchUser } from "./api/user";',
-            );
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/features/*/index.ts")],
-                symlinks: {
-                    "../external-nested/src/features/user": path.join(fixturesDir, "src/features/user/index.ts"),
-                },
-            };
+        it("should import a named export re-exported as default", async () => {
+            await file("src/features/f1/index.ts", 'export { Button as default } from "./components/Button";');
 
             const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/user.ts"),
+                filename: path.join(fixturesDir, "src/pages/test/default.ts"),
                 code: `
-                    import { UserProfile, fetchUser } from "../../../../../../external-nested/src/features/user";
-                    console.log(UserProfile, fetchUser);
-                `,
-                config,
-            });
-
-            expect(result.code).toMatchInlineSnapshot(`
-              "import { UserProfile } from "../features/user/components/UserProfile";
-              import { fetchUser } from "../features/user/api/user";
-              console.log(UserProfile, fetchUser);
-              "
-            `);
-            expect(result.stdout).toMatchInlineSnapshot(`""`);
-            expect(result.stderr).toMatchInlineSnapshot(`""`);
-        });
-
-        it("should resolve absolute paths correctly with relative paths in synlink configuration", async () => {
-            await file(
-                "src/features/user/index.ts",
-                'export { UserProfile } from "./components/UserProfile";\nexport { fetchUser } from "./api/user";',
-            );
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/features/*/index.ts")],
-                symlinks: {
-                    "../external-nested/src/features/user": path.join(fixturesDir, "src/features/user/index.ts"),
-                },
-            };
-
-            const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/user.ts"),
-                code: `
-                    import { UserProfile, fetchUser } from "${path.join(process.cwd(), "../external-nested/src/features/user")}";
-                    console.log(UserProfile, fetchUser);
-                `,
-                config,
-            });
-
-            expect(result.code).toMatchInlineSnapshot(`
-              "import { UserProfile } from "../features/user/components/UserProfile";
-              import { fetchUser } from "../features/user/api/user";
-              console.log(UserProfile, fetchUser);
-              "
-            `);
-            expect(result.stdout).toMatchInlineSnapshot(`""`);
-            expect(result.stderr).toMatchInlineSnapshot(`""`);
-        });
-
-        it("should handle absolute external paths with symlinks", async () => {
-            await file("src/components/index.ts", 'export { GlobalComponent } from "/absolute/path/to/component";');
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/components/index.ts")],
-                symlinks: {
-                    "/external/absolute/components": path.join(fixturesDir, "src/components/index.ts"),
-                },
-            };
-
-            const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/global.ts"),
-                code: `
-                    import { GlobalComponent } from "/external/absolute/components";
-                    console.log(GlobalComponent);
-                `,
-                config,
-            });
-
-            expect(result.code).toMatchInlineSnapshot(`
-              "import { GlobalComponent } from "/absolute/path/to/component";
-              console.log(GlobalComponent);
-              "
-            `);
-            expect(result.stdout).toMatchInlineSnapshot(`""`);
-            expect(result.stderr).toMatchInlineSnapshot(`""`);
-        });
-
-        it("should handle external imports that don't match symlinks", async () => {
-            await file("src/components/index.ts", 'export { Button } from "./Button";');
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/components/index.ts")],
-                symlinks: {
-                    "../some-other-lib/index.ts": path.join(fixturesDir, "src/components/index.ts"),
-                },
-            };
-
-            const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/test.ts"),
-                code: `
-                    import { Button } from "../non-existent-lib/components";
+                    import Button from "#features/f1";
                     console.log(Button);
                 `,
-                config,
+                config: defaultConfig,
             });
 
-            // Should leave the import unchanged since no symlink matches
             expect(result.code).toMatchInlineSnapshot(`
-              "import { Button } from "../non-existent-lib/components";
+              "import { Button } from "../../features/f1/components/Button";
               console.log(Button);
               "
             `);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
+        it("should leave a default import combined with a namespace import unchanged", async () => {
+            await file(
+                "src/features/f1/index.ts",
+                'export { default } from "./components/Button";\nexport { Input } from "./components/Input";',
+            );
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/mixed.ts"),
+                code: `
+                    import Button, * as f1 from "#features/f1";
+                    console.log(Button, f1);
+                `,
+                config: {
+                    ...defaultConfig,
+                    unsupported_import_mode: "off",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import Button, * as f1 from "#features/f1";
+              console.log(Button, f1);
+              "
+            `);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+        it("should leave side-effect imports of invalid barrel files alone", async () => {
+            await file("src/features/f1/index.ts", 'import "./polyfills";\nexport { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/side-effect.ts"),
+                code: `
+                    import "#features/f1";
+                `,
+                config: defaultConfig,
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import "#features/f1";
+              "
+            `);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+    });
+
+    describe("path matching", () => {
+        it("should apply an alias with context '.' to the whole project", async () => {
+            await file("src/features/f1/index.ts", 'export { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/context.ts"),
+                code: `
+                    import { Button } from "#features/f1";
+                    console.log(Button);
+                `,
+                config: {
+                    patterns: [path.join(fixturesDir, "src/features/*/index.ts")],
+                    aliases: [
+                        {
+                            pattern: "#features/*",
+                            paths: [path.join(fixturesDir, "src/features/*/index.ts")],
+                            context: ["."],
+                        },
+                    ],
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { Button } from "../../features/f1/components/Button";
+              console.log(Button);
+              "
+            `);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
+        it("should not apply an alias to a sibling directory sharing the context prefix", async () => {
+            await file("apps/app-1/src/features/f1/index.ts", 'export { Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "apps/app-10/src/page.ts"),
+                code: `
+                    import { Button } from "#features/f1";
+                    console.log(Button);
+                `,
+                config: {
+                    patterns: [path.join(fixturesDir, "apps/app-1/src/features/*/index.ts")],
+                    aliases: [
+                        {
+                            pattern: "#features/*",
+                            paths: [path.join(fixturesDir, "apps/app-1/src/features/*/index.ts")],
+                            context: [path.join(fixturesDir, "apps/app-1")],
+                        },
+                    ],
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { Button } from "#features/f1";
+              console.log(Button);
+              "
+            `);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
+        it("should reject patterns that climb out of cwd", async () => {
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/outside.ts"),
+                code: `console.log(1);`,
+                config: { patterns: ["../shared/*/index.ts"] },
+            });
+
+            // The rejected path is the parent of cwd, so it differs between machines
+            expect(result.code).toBe("");
+            expect(result.stderr).toContain("E_INVALID_FILE_PATH: Absolute paths not starting with cwd");
+        });
+
+        it("should parse .tsx barrel files with JSX syntax", async () => {
+            await file(
+                "src/features/f1/index.tsx",
+                'export { Button } from "./components/Button";\nexport const Icon = () => <svg />;',
+            );
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/tsx.ts"),
+                code: `
+                    import { Button } from "#features/f1";
+                    console.log(Button);
+                `,
+                config: {
+                    patterns: [path.join(fixturesDir, "src/features/*/index.tsx")],
+                    aliases: [
+                        {
+                            pattern: "#features/*",
+                            paths: [path.join(fixturesDir, "src/features/*/index.tsx")],
+                        },
+                    ],
+                    invalid_barrel_mode: "warn",
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { Button } from "#features/f1";
+              console.log(Button);
+              "
+            `);
+            expect(result.stderr).toMatchInlineSnapshot(`"Warning: E_INVALID_BARREL_FILE: Invalid barrel file /cwd/tests/fixtures/src/features/f1/index.tsx: Barrel file contains non-export code: Variable declarations are not allowed in barrel files"`);
+        });
+    });
+
+    describe("monorepo with symlinked workspace packages", () => {
+        // pnpm links workspace packages into node_modules with relative symlinks
+        async function setupWorkspace() {
+            await file("packages/lib/src/features/auth/index.ts", 'export { login } from "./api/login";');
+            await symlink("apps/app/node_modules/@scope/lib", "../../../../packages/lib");
+        }
+
+        it("should transform imports from a workspace package by its real path", async () => {
+            await setupWorkspace();
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "apps/app/src/page.ts"),
+                code: `
+                    import { login } from "@scope/lib/src/features/auth";
+                    console.log(login);
+                `,
+                config: {
+                    patterns: [path.join(fixturesDir, "packages/lib/src/features/*/index.ts")],
+                    aliases: [
+                        {
+                            pattern: "@scope/lib/src/features/*",
+                            paths: [path.join(fixturesDir, "packages/lib/src/features/*/index.ts")],
+                        },
+                    ],
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import { login } from "../../../packages/lib/src/features/auth/api/login";
+              console.log(login);
+              "
+            `);
             expect(result.stdout).toMatchInlineSnapshot(`""`);
             expect(result.stderr).toMatchInlineSnapshot(`""`);
         });
 
-        it("should handle context-specific aliases with external symlinks", async () => {
-            await file("app-a/src/features/shared/index.ts", 'export { ComponentA } from "./ComponentA";');
-            await file("app-b/src/features/shared/index.ts", 'export { ComponentB } from "./ComponentB";');
-
-            const config: PluginConfig = {
-                patterns: [
-                    path.join(fixturesDir, "app-a/src/features/*/index.ts"),
-                    path.join(fixturesDir, "app-b/src/features/*/index.ts"),
-                ],
-                aliases: [
-                    {
-                        pattern: "#external/*",
-                        paths: ["../external-app-a/features/*/index.ts"],
-                        context: [path.join(fixturesDir, "app-a")],
-                    },
-                    {
-                        pattern: "#external/*",
-                        paths: ["../external-app-b/features/*/index.ts"],
-                        context: [path.join(fixturesDir, "app-b")],
-                    },
-                ],
-                symlinks: {
-                    "../external-app-a/features/shared/index.ts": path.join(
-                        fixturesDir,
-                        "app-a/src/features/shared/index.ts",
-                    ),
-                    "../external-app-b/features/shared/index.ts": path.join(
-                        fixturesDir,
-                        "app-b/src/features/shared/index.ts",
-                    ),
-                },
-            };
-
-            // Test app-a context
-            const resultA = await transpileWithSwc({
-                filename: path.join(fixturesDir, "app-a/src/pages/test.ts"),
-                code: `
-                    import { ComponentA } from "#external/shared";
-                    console.log(ComponentA);
-                `,
-                config,
-            });
-
-            expect(resultA.code).toMatchInlineSnapshot(`
-              "import { ComponentA } from "../features/shared/ComponentA";
-              console.log(ComponentA);
-              "
-            `);
-
-            // Test app-b context
-            const resultB = await transpileWithSwc({
-                filename: path.join(fixturesDir, "app-b/src/pages/test.ts"),
-                code: `
-                    import { ComponentB } from "#external/shared";
-                    console.log(ComponentB);
-                `,
-                config,
-            });
-
-            expect(resultB.code).toMatchInlineSnapshot(`
-              "import { ComponentB } from "../features/shared/ComponentB";
-              console.log(ComponentB);
-              "
-            `);
-        });
-
-        it("should handle directory-level symlinks for single files", async () => {
-            await file("src/features/auth/index.ts", 'export { login } from "./api/login";');
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/features/*/index.ts")],
-                symlinks: {
-                    "../external-lib/features": path.join(fixturesDir, "src/features"),
-                },
-            };
+        it("should transform imports inside a workspace package", async () => {
+            await setupWorkspace();
 
             const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/test.ts"),
+                filename: path.join(fixturesDir, "packages/lib/src/pages/home.ts"),
                 code: `
-                    import { login } from "../../../../../../external-lib/features/auth/index.ts";
+                    import { login } from "#features/auth";
                     console.log(login);
                 `,
-                config,
+                config: {
+                    patterns: [path.join(fixturesDir, "packages/lib/src/features/*/index.ts")],
+                    aliases: [
+                        {
+                            pattern: "#features/*",
+                            paths: [path.join(fixturesDir, "packages/lib/src/features/*/index.ts")],
+                            context: [path.join(fixturesDir, "packages/lib")],
+                        },
+                    ],
+                },
             });
 
             expect(result.code).toMatchInlineSnapshot(`
@@ -1648,130 +1647,105 @@ describe("SWC Barrel Files Transformation", () => {
             expect(result.stderr).toMatchInlineSnapshot(`""`);
         });
 
-        it("should handle directory-level symlinks with aliases", async () => {
-            await file("src/libs/ui/index.ts", 'export { Button } from "./Button";');
-            await file("src/libs/utils/index.ts", 'export { helper } from "./helper";');
+        it("should not read barrel files through a symlink", async () => {
+            await setupWorkspace();
 
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/libs/*/index.ts")],
-                aliases: [
-                    {
-                        pattern: "#external/*",
-                        paths: ["../external-workspace/libs/*/index.ts"],
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "apps/app/src/page.ts"),
+                code: `
+                    import { login } from "@scope/lib/src/features/auth";
+                    console.log(login);
+                `,
+                config: {
+                    patterns: [path.join(fixturesDir, "apps/app/node_modules/@scope/lib/src/features/*/index.ts")],
+                    aliases: [
+                        {
+                            pattern: "@scope/lib/src/features/*",
+                            paths: [path.join(fixturesDir, "apps/app/node_modules/@scope/lib/src/features/*/index.ts")],
+                        },
+                    ],
+                },
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`""`);
+            expect(result.stdout).toMatchInlineSnapshot(`""`);
+            expect(result.stderr).toMatchInlineSnapshot(`
+              "x Error processing barrel import: E_BARREL_FILE_NOT_FOUND: Could not resolve barrel file for import alias @scope/lib/src/features/auth
+                 ,-[/cwd/tests/fixtures/apps/app/src/page.ts:2:1]
+               1 | 
+               2 |                     import { login } from "@scope/lib/src/features/auth";
+                 :                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               3 |                     console.log(login);
+               4 |                 
+                 \`----"
+            `);
+        });
+
+        it("should not read barrel files through a symlink pointing outside cwd", async () => {
+            const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "barrel-files-external-"));
+
+            try {
+                await fs.mkdir(path.join(externalDir, "src/features/auth"), { recursive: true });
+                await fs.writeFile(
+                    path.join(externalDir, "src/features/auth/index.ts"),
+                    'export { login } from "./api/login";',
+                );
+                await symlink("node_modules/@scope/external", externalDir);
+
+                const result = await transpileWithSwc({
+                    filename: path.join(fixturesDir, "src/page.ts"),
+                    code: `
+                        import { login } from "@scope/external/src/features/auth";
+                        console.log(login);
+                    `,
+                    config: {
+                        patterns: [path.join(fixturesDir, "node_modules/@scope/external/src/features/*/index.ts")],
+                        aliases: [
+                            {
+                                pattern: "@scope/external/src/features/*",
+                                paths: [path.join(fixturesDir, "node_modules/@scope/external/src/features/*/index.ts")],
+                            },
+                        ],
                     },
-                ],
-                symlinks: {
-                    "../external-workspace/libs": path.join(fixturesDir, "src/libs"),
-                },
-            };
+                });
 
-            const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/libs.ts"),
-                code: `
-                    import { Button } from "#external/ui";
-                    import { helper } from "#external/utils";
-                    console.log(Button, helper);
-                `,
-                config,
-            });
-
-            expect(result.code).toMatchInlineSnapshot(`
-              "import { Button } from "../libs/ui/Button";
-              import { helper } from "../libs/utils/helper";
-              console.log(Button, helper);
-              "
-            `);
-            expect(result.stdout).toMatchInlineSnapshot(`""`);
-            expect(result.stderr).toMatchInlineSnapshot(`""`);
+                expect(result.code).toMatchInlineSnapshot(`""`);
+                expect(result.stdout).toMatchInlineSnapshot(`""`);
+                expect(result.stderr).toMatchInlineSnapshot(`
+                  "x Error processing barrel import: E_BARREL_FILE_NOT_FOUND: Could not resolve barrel file for import alias @scope/external/src/features/auth
+                     ,-[/cwd/tests/fixtures/src/page.ts:2:1]
+                   1 | 
+                   2 |                         import { login } from "@scope/external/src/features/auth";
+                     :                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                   3 |                         console.log(login);
+                   4 |                     
+                     \`----"
+                `);
+            } finally {
+                await fs.rm(externalDir, { recursive: true, force: true });
+            }
         });
 
-        it("should prioritize specific file symlinks over directory symlinks", async () => {
-            await file("src/components/Button/index.ts", 'export { Button } from "./Button";');
-            await file("src/components/special/index.ts", 'export { SpecialButton } from "./SpecialButton";');
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/components/*/index.ts")],
-                symlinks: {
-                    "../external-lib/components": path.join(fixturesDir, "src/components"),
-                    "../external-lib/components/Button/index.ts": path.join(
-                        fixturesDir,
-                        "src/components/special/index.ts",
-                    ),
-                },
-            };
-
+        it("should reject the removed symlinks option", async () => {
             const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/priority.ts"),
-                code: `
-                    import { SpecialButton } from "../../../../../../external-lib/components/Button/index.ts";
-                    console.log(SpecialButton);
-                `,
-                config,
+                filename: path.join(fixturesDir, "src/page.ts"),
+                code: `console.log(1);`,
+                config: {
+                    ...defaultConfig,
+                    symlinks: { "../lib": "node_modules/lib" },
+                } as PluginConfig,
             });
 
-            expect(result.code).toMatchInlineSnapshot(`
-              "import { SpecialButton } from "../components/special/SpecialButton";
-              console.log(SpecialButton);
-              "
-            `);
+            expect(result.code).toMatchInlineSnapshot(`""`);
             expect(result.stdout).toMatchInlineSnapshot(`""`);
-            expect(result.stderr).toMatchInlineSnapshot(`""`);
-        });
+            expect(result.stderr).toMatchInlineSnapshot(`
+              "thread '<unnamed>' panicked at src/lib.rs:41:6:
+              E_INVALID_CONFIG: Error parsing barrel plugin configuration: Error("The \`symlinks\` option has been removed: SWC plugins cannot read files through symlinks. Run SWC from the monorepo root and use real paths in \`patterns\` and \`aliases\`", line: 1, column: ?)
+              note: run with \`RUST_BACKTRACE=1\` environment variable to display a backtrace
+              plugin
 
-        it("should handle directory-level symlinks with trailing slashes", async () => {
-            await file("src/features/auth/index.ts", 'export { login } from "./api/login";');
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/features/*/index.ts")],
-                symlinks: {
-                    "../external-lib/features/": path.join(fixturesDir, "src/features"),
-                },
-            };
-
-            const result = await transpileWithSwc({
-                filename: path.join(fixturesDir, "src/pages/trailing.ts"),
-                code: `
-                    import { login } from "../../../../../../external-lib/features/auth/index.ts";
-                    console.log(login);
-                `,
-                config,
-            });
-
-            expect(result.code).toMatchInlineSnapshot(`
-              "import { login } from "../features/auth/api/login";
-              console.log(login);
-              "
+                x failed to invoke plugin on 'Some("/cwd/tests/fixtures/src/page.ts")'"
             `);
-            expect(result.stdout).toMatchInlineSnapshot(`""`);
-            expect(result.stderr).toMatchInlineSnapshot(`""`);
-        });
-
-        it("should handle source file accessed through symlinked path", async () => {
-            await file("src/features/auth/index.ts", 'export { login } from "./api/login";');
-
-            const config: PluginConfig = {
-                patterns: [path.join(fixturesDir, "src/features/*/index.ts")],
-                symlinks: {
-                    "../external-src/": "tests/fixtures/src/",
-                },
-            };
-
-            const result = await transpileWithSwc({
-                filename: path.join(process.cwd(), "../external-src/pages/symlinked-source.ts"),
-                code: `
-                    import { login } from "../features/auth/index.ts";
-                    console.log(login);
-                `,
-                config,
-            });
-
-            expect(result.code).toMatchInlineSnapshot(`
-              "import { login } from "../features/auth/api/login";
-              console.log(login);
-              "
-            `);
-            expect(result.stdout).toMatchInlineSnapshot(`""`);
-            expect(result.stderr).toMatchInlineSnapshot(`""`);
         });
     });
 });
