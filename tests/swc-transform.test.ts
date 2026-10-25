@@ -1435,6 +1435,26 @@ describe("SWC Barrel Files Transformation", () => {
             expect(result.stderr).toMatchInlineSnapshot(`""`);
         });
 
+        it("should import a default export twice as one default and one named binding", async () => {
+            await file("src/features/f1/index.ts", 'export { default as Button } from "./components/Button";');
+
+            const result = await transpileWithSwc({
+                filename: path.join(fixturesDir, "src/pages/test/duplicate-default.ts"),
+                code: `
+                    import { Button, Button as OtherButton } from "#features/f1";
+                    console.log(Button, OtherButton);
+                `,
+                config: defaultConfig,
+            });
+
+            expect(result.code).toMatchInlineSnapshot(`
+              "import Button, { default as OtherButton } from "../../features/f1/components/Button";
+              console.log(Button, OtherButton);
+              "
+            `);
+            expect(result.stderr).toMatchInlineSnapshot(`""`);
+        });
+
         it("should leave a default import combined with a namespace import unchanged", async () => {
             await file(
                 "src/features/f1/index.ts",

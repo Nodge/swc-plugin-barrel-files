@@ -10,8 +10,8 @@ use swc_core::common::SourceMap;
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::Module;
 use swc_core::ecma::ast::{
-    ImportDecl, ImportDefaultSpecifier, ImportNamedSpecifier, ImportSpecifier, ModuleExportName,
-    Str,
+    ImportDecl, ImportDefaultSpecifier, ImportNamedSpecifier, ImportPhase, ImportSpecifier,
+    ModuleExportName, Str,
 };
 use swc_core::ecma::parser::{parse_file_as_module, Syntax, TsSyntax};
 
@@ -40,7 +40,7 @@ fn create_default_specifier(
     })
 }
 
-/// Creates a named import specifier for a non-default re-export
+/// Creates a named import specifier
 fn create_named_specifier(
     span: swc_core::common::Span,
     local_name: &swc_core::ecma::ast::Ident,
@@ -101,7 +101,8 @@ pub fn transform_import(
     barrel_file: &str,
     config: &Config,
 ) -> Result<Option<Vec<ImportDecl>>, String> {
-    if import_decl.specifiers.is_empty() {
+    // Source and defer phase imports bind the module itself, not its exports
+    if import_decl.specifiers.is_empty() || import_decl.phase != ImportPhase::Evaluation {
         return Ok(None);
     }
 
@@ -180,7 +181,15 @@ pub fn transform_import(
         let specifiers = new_imports.entry(import_path).or_default();
 
         for binding in bindings {
-            specifiers.push(if re_export.is_default {
+            // A declaration holds one default binding and it cannot be type-only,
+            // so the rest read `default` by name
+            let as_default = re_export.is_default
+                && !binding.is_type_only
+                && !specifiers
+                    .iter()
+                    .any(|specifier| matches!(specifier, ImportSpecifier::Default(_)));
+
+            specifiers.push(if as_default {
                 create_default_specifier(binding.span, binding.local)
             } else {
                 create_named_specifier(binding.span, binding.local, re_export, binding.is_type_only)
